@@ -9,17 +9,18 @@ from flask import Flask
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-MONGO_URL = os.environ.get("MONGO_URL", "") # MongoDB URL ഇവിടെ നൽകണം
+MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
 app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # --- MongoDB Setup ---
+# (മറ്റ് ബോട്ടുകളുമായി പ്രശ്നം ഉണ്ടാകാതിരിക്കാൻ പുതിയ പേര് നൽകിയിരിക്കുന്നു)
 mongo_client = pymongo.MongoClient(MONGO_URL)
-db = mongo_client["terabox_database"]
-settings_col = db["user_settings"]
+db = mongo_client["my_magic_terabox_db"]
+settings_col = db["magic_bot_settings"]
 
-# ഡാറ്റാബേസിൽ നിന്നും സെറ്റിങ്സ് എടുക്കാനുള്ള ഫംഗ്ഷൻ (യൂസർ ഐഡി അനുസരിച്ച്)
+# ഡാറ്റാബേസിൽ നിന്നും വിവരങ്ങൾ എടുക്കാൻ
 def get_settings(user_id):
     settings = settings_col.find_one({"user_id": user_id})
     if not settings:
@@ -38,21 +39,20 @@ def get_settings(user_id):
         return default_settings
     return settings
 
-# ഡാറ്റാബേസിലെ സെറ്റിങ്സ് അപ്ഡേറ്റ് ചെയ്യാനുള്ള ഫംഗ്ഷൻ
+# പുതിയ വിവരങ്ങൾ നൽകുമ്പോൾ പഴയത് മാറ്റി പുതിയത് സേവ് ചെയ്യാൻ (Replace)
 def update_settings(user_id, key, value):
     settings_col.update_one({"user_id": user_id}, {"$set": {key: value}}, upsert=True)
 
-# --- Dummy Web Server (For UptimeRobot) ---
+# --- Dummy Web Server ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "TeraBox MongoDB Bot is Running 24/7!"
+    return "TeraBox Magic Bot with MongoDB is Running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host="0.0.0.0", port=port)
-# ------------------------------------------
 
 # --- Commands ---
 @app.on_message(filters.command("start"))
@@ -63,20 +63,28 @@ async def start(client, message):
 async def set_photo(client, message):
     if message.photo:
         file_id = message.photo.file_id
-        update_settings(message.chat.id, "custom_photo_id", file_id)
-        update_settings(message.chat.id, "enable_picture", True)
-        await message.reply_text("✅ Original Custom photo saved permanently in Database!")
+    elif message.document:
+        file_id = message.document.file_id
     else:
         await message.reply_text("❌ Please send a photo along with the /set_photo command.")
+        return
+
+    update_settings(message.chat.id, "custom_photo_id", file_id)
+    update_settings(message.chat.id, "enable_picture", True)
+    await message.reply_text("✅ Original Custom photo saved permanently! (Old photo replaced in DB)")
 
 @app.on_message(filters.command("set_fake_photo") & filters.private)
 async def set_fake_photo(client, message):
     if message.photo:
         file_id = message.photo.file_id
-        update_settings(message.chat.id, "fake_photo_id", file_id)
-        await message.reply_text("✅ Fake photo (Thumbnail) saved permanently in Database!")
+    elif message.document:
+        file_id = message.document.file_id
     else:
         await message.reply_text("❌ Please send a blurred/fake photo along with the /set_fake_photo command.")
+        return
+
+    update_settings(message.chat.id, "fake_photo_id", file_id)
+    await message.reply_text("✅ Fake photo (Thumbnail) saved permanently! (Old thumbnail replaced in DB)")
 
 @app.on_message(filters.command("add_header") & filters.private)
 async def add_header(client, message):
@@ -140,7 +148,6 @@ async def handle_link(client, message):
     if urls:
         wait_msg = await message.reply_text("Preparing your magic post... ✨")
         
-        # ഡാറ്റാബേസിൽ നിന്നും ഈ യൂസറുടെ സെറ്റിങ്സ് എടുക്കുന്നു
         settings = get_settings(message.chat.id)
         
         unique_urls = list(dict.fromkeys(urls))
@@ -154,27 +161,39 @@ async def handle_link(client, message):
             
             if settings["enable_picture"] and settings["custom_photo_id"]:
                 
-                # റീസ്റ്റാർട്ട് ആയാലും ഫയൽ മിസ്സ് ആവാതിരിക്കാൻ താൽക്കാലികമായി ഡൗൺലോഡ് ചെയ്യുന്നു
-                doc_path = "original_photo.jpg"
-                if not os.path.exists(doc_path):
-                    await client.download_media(settings["custom_photo_id"], file_name=doc_path)
+                # റീസ്റ്റാർട്ട് ആയാലും എറർ വരാതിരിക്കാൻ ഫയലുകൾ താൽക്കാലികമായി ഡൗൺലോഡ് ചെയ്യുന്നു
+                doc_path = await client.download_media(settings["custom_photo_id"])
                 
                 if settings["fake_photo_id"] and settings["use_blur"]:
-                    thumb_path = "fake_photo.jpg"
-                    if not os.path.exists(thumb_path):
-                        await client.download_media(settings["fake_photo_id"], file_name=thumb_path)
+                    thumb_path = await client.download_media(settings["fake_photo_id"])
                     
                     try:
                         await client.send_document(
-                            chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name="Click_To_Open.jpg", caption=final_caption
+                            chat_id=message.chat.id, 
+                            document=doc_path, 
+                            thumbnail=thumb_path, 
+                            file_name="Click_To_Open.jpg", 
+                            caption=final_caption
                         )
                     except TypeError:
                         await client.send_document(
-                            chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name="Click_To_Open.jpg", caption=final_caption
+                            chat_id=message.chat.id, 
+                            document=doc_path, 
+                            thumb=thumb_path, 
+                            file_name="Click_To_Open.jpg", 
+                            caption=final_caption
                         )
+                    
+                    # അയച്ച ഉടനെ സർവറിൽ നിന്നും തമ്പ്‌നെയിൽ മായ്ച്ചു കളയുന്നു (Clean up)
+                    if thumb_path and os.path.exists(thumb_path):
+                        os.remove(thumb_path)
                 else:
                     await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption)
                 
+                # മെയിൻ ഫയലും മായ്ച്ചു കളയുന്നു
+                if doc_path and os.path.exists(doc_path):
+                    os.remove(doc_path)
+                    
                 await wait_msg.delete()
             else:
                 await wait_msg.edit_text(final_caption)
@@ -186,5 +205,5 @@ async def handle_link(client, message):
 
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-    print("Bot is running...")
+    print("Bot is running perfectly with MongoDB...")
     app.run()
