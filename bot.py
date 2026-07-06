@@ -31,7 +31,8 @@ def get_settings(user_id):
             "fake_photo_id": None,
             "enable_picture": True,
             "link_text": "🍓Video ",
-            "use_experiment": True 
+            "use_blur": True,
+            "layout_mode": "large" # പുതിയ ഡ്യുവൽ മോഡ് സെറ്റിങ്സ്
         }
         settings_col.insert_one(default_settings)
         return default_settings
@@ -45,7 +46,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "TeraBox Lab Experiment Bot is Running!"
+    return "TeraBox Dual Mode Bot is Running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -54,7 +55,7 @@ def run_web():
 # --- Commands ---
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("Welcome to TeraBox Experiment Lab! 🧪\n\nSet your photos and forward the links to test the large photo glitch.")
+    await message.reply_text("Welcome to TeraBox Dual Mode Bot! ✨\n\nUse /mode_large for big photos or /mode_magic for fake thumbnails.")
 
 @app.on_message(filters.command("set_photo") & filters.private)
 async def set_photo(client, message):
@@ -80,27 +81,62 @@ async def set_fake_photo(client, message):
     update_settings(message.chat.id, "fake_photo_id", file_id)
     await message.reply_text("✅ Fake photo (Thumbnail) saved!")
 
-@app.on_message(filters.command("enable_experiment") & filters.private)
-async def enable_exp(client, message):
-    update_settings(message.chat.id, "use_experiment", True)
-    await message.reply_text("🧪 Experimental Large Fake Photo Mode Enabled!")
+# --- പുതിയ ഡ്യുവൽ മോഡ് കമാൻഡുകൾ ---
+@app.on_message(filters.command("mode_large") & filters.private)
+async def mode_large(client, message):
+    update_settings(message.chat.id, "layout_mode", "large")
+    await message.reply_text("🖼 **Large Photo Mode Enabled!**\nപോസ്റ്റുകൾ വലിയ ഫോട്ടോകളായി വരും (ഫേക്ക് ഫോട്ടോ കാണിക്കില്ല, പകരം ബ്ലർ വരും).")
 
-@app.on_message(filters.command("disable_experiment") & filters.private)
-async def disable_exp(client, message):
-    update_settings(message.chat.id, "use_experiment", False)
-    await message.reply_text("⚙️ Standard Mode Enabled (Sends as normal document file).")
+@app.on_message(filters.command("mode_magic") & filters.private)
+async def mode_magic(client, message):
+    update_settings(message.chat.id, "layout_mode", "magic")
+    await message.reply_text("✨ **Magic File Mode Enabled!**\nപോസ്റ്റുകൾ ചെറിയ ഫയലുകളായി വരും, അതിൽ നിങ്ങളുടെ ഫേക്ക് ഫോട്ടോ കാണിക്കും.")
 
-# --- Link Extraction & Experimental Processing ---
+@app.on_message(filters.command("enable_blur") & filters.private)
+async def enable_blur(client, message):
+    update_settings(message.chat.id, "use_blur", True)
+    await message.reply_text("✅ Blur enabled!")
+
+@app.on_message(filters.command("disable_blur") & filters.private)
+async def disable_blur(client, message):
+    update_settings(message.chat.id, "use_blur", False)
+    await message.reply_text("✅ Blur disabled!")
+
+@app.on_message(filters.command("add_header") & filters.private)
+async def add_header(client, message):
+    text = message.text.replace("/add_header", "").strip()
+    update_settings(message.chat.id, "header", text + "\n\n" if text else "")
+    await message.reply_text("✅ Header updated.")
+
+@app.on_message(filters.command("add_footer") & filters.private)
+async def add_footer(client, message):
+    text = message.text.replace("/add_footer", "").strip()
+    update_settings(message.chat.id, "footer", "\n\n" + text if text else "")
+    await message.reply_text("✅ Footer updated.")
+
+@app.on_message(filters.command("channel") & filters.private)
+async def set_channel(client, message):
+    text = message.text.replace("/channel", "").strip()
+    update_settings(message.chat.id, "channel", f"\n📢 Join: {text}" if text else "")
+    await message.reply_text("✅ Channel updated.")
+
+@app.on_message(filters.command("set_link_text") & filters.private)
+async def set_link_text(client, message):
+    text = message.text.replace("/set_link_text", "").strip()
+    if text:
+        update_settings(message.chat.id, "link_text", text + " ")
+        await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
+
+# --- Link Extraction & Dual Mode Processing ---
 @app.on_message((filters.text | filters.photo) & filters.private)
 async def handle_link(client, message):
     user_text = message.text or message.caption
-    if not user_text:
-        return
+    if not user_text: return
     
     urls = re.findall(r"(https?://\S*(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
     
     if urls:
-        wait_msg = await message.reply_text("Running experiment... 🧪")
+        wait_msg = await message.reply_text("Designing your post... 🎨")
         settings = get_settings(message.chat.id)
         
         unique_urls = list(dict.fromkeys(urls))
@@ -116,40 +152,40 @@ async def handle_link(client, message):
             custom_photo = settings.get("custom_photo_id")
             fake_photo = settings.get("fake_photo_id")
             
-            if custom_photo:
+            if custom_photo and settings.get("enable_picture", True):
                 doc_path = await client.download_media(custom_photo)
-                thumb_path = await client.download_media(fake_photo) if fake_photo else None
                 
-                if settings.get("use_experiment", True) and thumb_path:
-                    try:
-                        await client.send_photo(
-                            chat_id=message.chat.id,
-                            photo=doc_path,
-                            caption=final_caption,
-                            replaces_video_thumb=thumb_path 
-                        )
-                        await wait_msg.delete()
-                    except Exception as exp_error:
+                # --- Mode 1: മാജിക് ഫയൽ മോഡ് (ചെറിയ ഫയൽ + ഫേക്ക് ഫോട്ടോ) ---
+                if settings.get("layout_mode") == "magic":
+                    thumb_path = await client.download_media(fake_photo) if fake_photo else None
+                    if settings.get("use_blur", True) and thumb_path:
                         try:
-                            # തിരുത്തിയ ഭാഗം: thumbnail മാറ്റി thumb ആക്കി മാറ്റി
-                            await client.send_video(
-                                chat_id=message.chat.id,
-                                video=doc_path, 
-                                thumb=thumb_path,
-                                caption=final_caption,
-                                duration=1 
+                            await client.send_document(
+                                chat_id=message.chat.id, 
+                                document=doc_path, 
+                                thumbnail=thumb_path, 
+                                file_name="🔞_Click_To_Open_🍓.jpg", # ആകർഷകമായ പേര്
+                                caption=final_caption
                             )
-                            await wait_msg.delete()
-                        except Exception as final_error:
-                            await wait_msg.edit_text(f"🧪 Experiment Result: Failed.\n\nTelegram Server Error: {str(final_error)}")
+                        except TypeError:
+                            await client.send_document(
+                                chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name="🔞_Click_To_Open_🍓.jpg", caption=final_caption
+                            )
+                    else:
+                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name="🔞_Click_To_Open_🍓.jpg", caption=final_caption)
+                    if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
+                
+                # --- Mode 2: വലിയ ഫോട്ടോ മോഡ് (വലിയ സൈസ് + ഒഫീഷ്യൽ ബ്ലർ) ---
                 else:
-                    await client.send_document(
-                        chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name="Click_To_Open.jpg", caption=final_caption
+                    await client.send_photo(
+                        chat_id=message.chat.id, 
+                        photo=doc_path, 
+                        caption=final_caption,
+                        has_spoiler=settings.get("use_blur", True) # ഒഫീഷ്യൽ ടെലിഗ്രാം സ്പോയിലർ ഉപയോഗിക്കുന്നു
                     )
-                    await wait_msg.delete()
                 
                 if doc_path and os.path.exists(doc_path): os.remove(doc_path)
-                if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
+                await wait_msg.delete()
             else:
                 await wait_msg.edit_text(final_caption)
                 
@@ -157,9 +193,9 @@ async def handle_link(client, message):
             await wait_msg.edit_text(f"❌ System Error: {str(e)}")
             
     elif not user_text.startswith("/"):
-        await message.reply_text("Please forward Terabox links to test.")
+        await message.reply_text("Please forward Terabox links.")
 
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-    print("Experiment Bot is running...")
+    print("Dual Mode Bot is running...")
     app.run()
