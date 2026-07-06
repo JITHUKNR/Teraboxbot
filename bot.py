@@ -31,7 +31,7 @@ def get_settings(user_id):
             "fake_photo_id": None,
             "enable_picture": True,
             "link_text": "🍓Video ",
-            "use_experiment": True # പരീക്ഷണം ഓൺ ആക്കി വെക്കാൻ
+            "use_experiment": True 
         }
         settings_col.insert_one(default_settings)
         return default_settings
@@ -105,51 +105,49 @@ async def handle_link(client, message):
         
         unique_urls = list(dict.fromkeys(urls))
         formatted_links = ""
+        link_prefix = settings.get('link_text', '🍓Video ')
         for index, url in enumerate(unique_urls, start=1):
-            formatted_links += f"{settings['link_text']}{index}\n{url}\n\n\n"
+            formatted_links += f"{link_prefix}{index}\n{url}\n\n\n"
         formatted_links = formatted_links.strip()
         
         final_caption = f"{settings.get('header', '')}{formatted_links}{settings.get('channel', '')}{settings.get('footer', '')}"
         
         try:
-            if settings["custom_photo_id"]:
-                doc_path = await client.download_media(settings["custom_photo_id"])
-                thumb_path = await client.download_media(settings["fake_photo_id"]) if settings["fake_photo_id"] else None
+            custom_photo = settings.get("custom_photo_id")
+            fake_photo = settings.get("fake_photo_id")
+            
+            if custom_photo:
+                doc_path = await client.download_media(custom_photo)
+                thumb_path = await client.download_media(fake_photo) if fake_photo else None
                 
-                # --- ഇവിടെയാണ് പരീക്ഷണം നടക്കുന്നത് ---
-                if settings["use_experiment"] and thumb_path:
+                # എറർ വരാതിരിക്കാൻ .get() ഉപയോഗിച്ച് സുരക്ഷിതമാക്കി
+                if settings.get("use_experiment", True) and thumb_path:
                     try:
-                        # വലിയ ഫോട്ടോയായി അയക്കാൻ ശ്രമിക്കുന്നു, ഒപ്പം തമ്പ്‌നെയിൽ ഫോഴ്സ് ചെയ്യുന്നു
                         await client.send_photo(
                             chat_id=message.chat.id,
                             photo=doc_path,
                             caption=final_caption,
-                            replaces_video_thumb=thumb_path # ചില അപ്ഡേറ്റുകളിൽ വർക്കാവാൻ സാധ്യതയുള്ള പാരാമീറ്റർ
+                            replaces_video_thumb=thumb_path 
                         )
                         await wait_msg.delete()
                     except Exception as exp_error:
-                        # ഒന്നാമത്തെ ട്രിക്ക് പരാജയപ്പെട്ടാൽ അടുത്ത വഴി നോക്കുന്നു
                         try:
                             await client.send_video(
                                 chat_id=message.chat.id,
-                                video=doc_path, # ഫോട്ടോയെ വീഡിയോ ആയി കാണിക്കാൻ നോക്കുന്നു
+                                video=doc_path, 
                                 thumbnail=thumb_path,
                                 caption=final_caption,
-                                duration=1 # വലിയ ഫോട്ടോ ലേഔട്ട് കിട്ടാൻ വേണ്ടി
+                                duration=1 
                             )
                             await wait_msg.delete()
                         except Exception as final_error:
-                            # രണ്ട് പരീക്ഷണവും പരാജയപ്പെട്ടാൽ എറർ കാണിക്കും
                             await wait_msg.edit_text(f"🧪 Experiment Result: Failed.\n\nTelegram Server Error: {str(final_error)}")
-                
-                # പരീക്ഷണം ഓഫ് ആണെങ്കിൽ സാധാരണ പോലെ ഫയൽ ആയി അയക്കും
                 else:
                     await client.send_document(
                         chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name="Click_To_Open.jpg", caption=final_caption
                     )
                     await wait_msg.delete()
                 
-                # ഫയലുകൾ ഡിലീറ്റ് ചെയ്യുക
                 if doc_path and os.path.exists(doc_path): os.remove(doc_path)
                 if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
             else:
