@@ -120,7 +120,6 @@ async def handle_link(client, message):
                 doc_path = await client.download_media(custom_photo)
                 thumb_path = await client.download_media(fake_photo) if fake_photo else None
                 
-                # എറർ വരാതിരിക്കാൻ .get() ഉപയോഗിച്ച് സുരക്ഷിതമാക്കി
                 if settings.get("use_experiment", True) and thumb_path:
                     try:
                         await client.send_photo(
@@ -132,10 +131,11 @@ async def handle_link(client, message):
                         await wait_msg.delete()
                     except Exception as exp_error:
                         try:
+                            # തിരുത്തിയ ഭാഗം: thumbnail മാറ്റി thumb ആക്കി മാറ്റി
                             await client.send_video(
                                 chat_id=message.chat.id,
                                 video=doc_path, 
-                                thumbnail=thumb_path,
+                                thumb=thumb_path,
                                 caption=final_caption,
                                 duration=1 
                             )
