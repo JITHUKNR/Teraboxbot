@@ -78,17 +78,22 @@ async def enable_picture(client, message):
     USER_SETTINGS["enable_picture"] = True
     await message.reply_text("✅ ഫോട്ടോ ഓൺ ആക്കി.")
 
-# --- Link Extraction & Formatting (ഇവിടെയാണ് മാജിക് നടക്കുന്നത്) ---
-@app.on_message(filters.text & filters.private)
+# --- Link Extraction & Formatting (ഇവിടെയാണ് മാറ്റം വരുത്തിയത്) ---
+# filters.text ന് പകരം ഫോട്ടോയും ക്യാപ്ഷനും കൂടി ഉൾപ്പെടുത്തി
+@app.on_message((filters.text | filters.photo) & filters.private)
 async def handle_link(client, message):
-    user_text = message.text
+    # മെസ്സേജ് ടെക്സ്റ്റ് ആണെങ്കിലും ഫോട്ടോയുടെ ക്യാപ്ഷൻ ആണെങ്കിലും അത് വേർതിരിച്ചെടുക്കുന്നു
+    user_text = message.text or message.caption
+    
+    if not user_text:
+        return
     
     # മെസ്സേജിൽ നിന്നും Terabox/Terashare ലിങ്ക് മാത്രം യാതൊരു മാറ്റവുമില്ലാതെ വലിച്ചെടുക്കുന്നു
-    url_match = re.search(r"(https?://\S+(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
+    url_match = re.search(r"(https?://\S*(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
     
     if url_match:
         wait_msg = await message.reply_text("ഡിസൈൻ തയ്യാറാക്കുന്നു... 🎨")
-        extracted_link = url_match.group(1) # വേർതിരിച്ചെടുത്ത നിങ്ങളുടെ ഒറിജിനൽ ലിങ്ക്
+        extracted_link = url_match.group(1) 
         
         try:
             # പുതിയ ക്യാപ്ഷൻ നിർമ്മിക്കുന്നു
