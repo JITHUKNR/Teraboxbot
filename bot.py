@@ -16,15 +16,23 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+# പഴയ സെഷൻ എററുകൾ വരാതിരിക്കാൻ
+session_name = "terabox_magic_bot"
+if os.path.exists(f"{session_name}.session-journal"):
+    try: os.remove(f"{session_name}.session-journal")
+    except: pass
 
-# --- MongoDB Setup ---
+app = Client(session_name, api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# --- MongoDB Setup (ഹാങ് ആവാതിരിക്കാൻ Fast Timeout നൽകി) ---
 try:
-    mongo_client = pymongo.MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+    mongo_client = pymongo.MongoClient(MONGO_URL, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
     db = mongo_client["my_magic_terabox_db"]
     settings_col = db["magic_bot_settings"]
+    mongo_client.admin.command('ping') # കണക്ഷൻ ടെസ്റ്റ് ചെയ്യാൻ
+    logging.info("MongoDB Connected Successfully!")
 except Exception as e:
-    logging.error(f"MongoDB Connection Error: {e}")
+    logging.error(f"MongoDB Error: {e}")
 
 FILE_CACHE = {}
 
@@ -43,22 +51,21 @@ def get_settings(user_id):
                 "link_text": "🍓Video ",
                 "use_blur": True,
                 "layout_mode": "magic", 
-                "file_name": "🔞_Click_To_Open_🍓" # ഡിഫോൾട്ട് ആയി .jpg ഒഴിവാക്കി
+                "file_name": "🔞_Click_To_Open_🍓"
             }
             settings_col.insert_one(default_settings)
             return default_settings
         return settings
     except Exception as e:
-        logging.error(f"Database Fetch Error: {e}")
+        logging.error(f"DB Fetch Error: {e}")
         return None
 
 def update_settings(user_id, key, value):
     try:
         settings_col.update_one({"user_id": user_id}, {"$set": {key: value}}, upsert=True)
     except Exception as e:
-        logging.error(f"Database Update Error: {e}")
+        logging.error(f"DB Update Error: {e}")
 
-# കളർ ഫോർമാറ്റ് പ്രശ്നങ്ങൾ പരിഹരിക്കാൻ RGB കോഡ് ചേർത്തു
 def resize_thumbnail(thumb_path):
     try:
         img = Image.open(thumb_path)
@@ -67,9 +74,9 @@ def resize_thumbnail(thumb_path):
         img.thumbnail((320, 320))
         img.save(thumb_path, "JPEG")
     except Exception as e:
-        logging.error(f"Thumbnail resize error: {e}")
+        logging.error(f"Thumbnail error: {e}")
 
-# --- Dummy Web Server ---
+# --- Web Server ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -90,7 +97,7 @@ async def set_photo(client, message):
     if message.photo: file_id = message.photo.file_id
     elif message.document: file_id = message.document.file_id
     else:
-        await message.reply_text("❌ Please send a photo with /set_photo")
+        await message.reply_text("❌ Please send a photo.")
         return
     update_settings(message.chat.id, "custom_photo_id", file_id)
     if file_id in FILE_CACHE: del FILE_CACHE[file_id]
@@ -101,7 +108,7 @@ async def set_fake_photo(client, message):
     if message.photo: file_id = message.photo.file_id
     elif message.document: file_id = message.document.file_id
     else:
-        await message.reply_text("❌ Please send a photo with /set_fake_photo")
+        await message.reply_text("❌ Please send a fake photo.")
         return
     update_settings(message.chat.id, "fake_photo_id", file_id)
     if file_id in FILE_CACHE: del FILE_CACHE[file_id]
@@ -160,9 +167,8 @@ async def set_link_text(client, message):
     text = message.text.replace("/set_link_text", "").strip()
     if text:
         update_settings(message.chat.id, "link_text", text + " ")
-        await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
+        await message.reply_text(f"✅ Link text set to: {text} 1")
 
-# പുതിയ കമാൻഡ്: .jpg തനിയെ വരുന്നത് എടുത്തുകളഞ്ഞു
 @app.on_message(filters.command("set_file_name") & filters.private)
 async def set_file_name(client, message):
     text = message.text.replace("/set_file_name", "").strip()
@@ -170,9 +176,9 @@ async def set_file_name(client, message):
         update_settings(message.chat.id, "file_name", text)
         await message.reply_text(f"✅ File name set to: {text}")
     else:
-        await message.reply_text("❌ Please provide text. Example: /set_file_name NEW🥵🍓")
+        await message.reply_text("❌ Example: /set_file_name NEW🥵🍓")
 
-# --- Link Extraction & RAM SPEED BOOST Processing ---
+# --- Link Extraction ---
 @app.on_message((filters.text | filters.photo) & filters.private)
 async def handle_link(client, message):
     user_text = message.text or message.caption
@@ -181,13 +187,13 @@ async def handle_link(client, message):
     urls = re.findall(r"(https?://\S*(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
     
     if urls:
-        wait_msg = await message.reply_text("Designing your post... 🎨")
         settings = get_settings(message.chat.id)
-        
         if not settings:
-            await wait_msg.edit_text("❌ Database Error. Please check your MongoDB setup.")
+            await message.reply_text("❌ Database Error. Please check MongoDB Network Access.")
             return
 
+        wait_msg = await message.reply_text("Designing your post... 🎨")
+        
         unique_urls = list(dict.fromkeys(urls))
         formatted_links = ""
         link_prefix = settings.get('link_text', '🍓Video ')
@@ -202,11 +208,10 @@ async def handle_link(client, message):
             fake_photo = settings.get("fake_photo_id")
             
             if custom_photo and settings.get("enable_picture", True):
-                
                 doc_path = f"{custom_photo}.jpg"
                 if custom_photo not in FILE_CACHE or not os.path.exists(doc_path):
                     actual_path = await client.download_media(custom_photo)
-                    if os.path.exists(actual_path):
+                    if actual_path and os.path.exists(actual_path):
                         os.rename(actual_path, doc_path)
                     FILE_CACHE[custom_photo] = doc_path
                 
@@ -218,23 +223,18 @@ async def handle_link(client, message):
                         thumb_path = f"{fake_photo}.jpg"
                         if fake_photo not in FILE_CACHE or not os.path.exists(thumb_path):
                             actual_thumb = await client.download_media(fake_photo)
-                            if os.path.exists(actual_thumb):
+                            if actual_thumb and os.path.exists(actual_thumb):
                                 os.rename(actual_thumb, thumb_path)
-                            resize_thumbnail(thumb_path) 
+                            resize_thumbnail(thumb_path)
                             FILE_CACHE[fake_photo] = thumb_path
                             
                     if settings.get("use_blur", True) and thumb_path:
                         try:
-                            await client.send_document(
-                                chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption
-                            )
+                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption)
                         except TypeError:
-                            await client.send_document(
-                                chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption
-                            )
+                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption)
                     else:
                         await client.send_document(chat_id=message.chat.id, document=doc_path, file_name=custom_file_name, caption=final_caption)
-                
                 else:
                     await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True))
                 
