@@ -12,7 +12,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# User Settings (പുതിയതായി ഫേക്ക് ഫോട്ടോ കൂടി ചേർത്തു)
+# User Settings
 USER_SETTINGS = {
     "header": "",
     "footer": "",
@@ -20,7 +20,8 @@ USER_SETTINGS = {
     "custom_photo_id": None, # ഒറിജിനൽ ഫോട്ടോ
     "fake_photo_id": None,   # പുറമെ കാണിക്കാനുള്ള ഫേക്ക് (ബ്ലർ) ഫോട്ടോ
     "enable_picture": True,
-    "link_text": "🍓Video "
+    "link_text": "🍓Video ",
+    "use_blur": True # മാജിക് ബ്ലർ ഓൺ/ഓഫ് ചെയ്യാനുള്ള വേരിയബിൾ
 }
 
 # --- Dummy Web Server (For UptimeRobot) ---
@@ -46,7 +47,7 @@ async def set_photo(client, message):
     if message.photo:
         USER_SETTINGS["custom_photo_id"] = message.photo.file_id
         USER_SETTINGS["enable_picture"] = True
-        await message.reply_text("✅ Original Custom photo set successfully! (ഇത് ഡൗൺലോഡ് ചെയ്യുമ്പോൾ കാണേണ്ട ഫോട്ടോയാണ്)")
+        await message.reply_text("✅ Original Custom photo set successfully! (This will show after download)")
     else:
         await message.reply_text("❌ Please send a photo along with the /set_photo command.")
 
@@ -55,7 +56,7 @@ async def set_photo(client, message):
 async def set_fake_photo(client, message):
     if message.photo:
         USER_SETTINGS["fake_photo_id"] = message.photo.file_id
-        await message.reply_text("✅ Fake photo (Thumbnail) set successfully! (ഇത് പുറമെ കാണിക്കുന്ന പറ്റിക്കൽ ഫോട്ടോയാണ്)")
+        await message.reply_text("✅ Fake photo (Thumbnail) set successfully! (This will show at first)")
     else:
         await message.reply_text("❌ Please send a blurred/fake photo along with the /set_fake_photo command.")
 
@@ -88,6 +89,17 @@ async def set_link_text(client, message):
         await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
     else:
         await message.reply_text("❌ Please provide text. Example: /set_link_text 🎬 Episode")
+
+# പുതിയതായി ചേർത്ത ബ്ലർ കമാൻഡുകൾ
+@app.on_message(filters.command("enable_blur") & filters.private)
+async def enable_blur(client, message):
+    USER_SETTINGS["use_blur"] = True
+    await message.reply_text("✅ Magic Blur enabled! Photos will be sent with a fake blurred preview.")
+
+@app.on_message(filters.command("disable_blur") & filters.private)
+async def disable_blur(client, message):
+    USER_SETTINGS["use_blur"] = False
+    await message.reply_text("✅ Magic Blur disabled! Photos will be sent normally without any glitch.")
 
 @app.on_message(filters.command("disable_picture") & filters.private)
 async def disable_picture(client, message):
@@ -125,16 +137,16 @@ async def handle_link(client, message):
             
             if USER_SETTINGS["enable_picture"] and USER_SETTINGS["custom_photo_id"]:
                 
-                # മാജിക് ഫോട്ടോ വർക്ക് ചെയ്യുന്ന ഭാഗം
-                if USER_SETTINGS["fake_photo_id"]:
+                # മാജിക് ബ്ലർ ഓൺ ആണെങ്കിൽ തമ്പ്‌നെയിൽ വെച്ച് അയക്കും
+                if USER_SETTINGS["fake_photo_id"] and USER_SETTINGS["use_blur"]:
                     await client.send_document(
                         chat_id=message.chat.id, 
-                        document=USER_SETTINGS["custom_photo_id"], # ഒറിജിനൽ ഫോട്ടോ
-                        thumb=USER_SETTINGS["fake_photo_id"],      # ഫേക്ക് തമ്പ്‌നെയിൽ
-                        file_name="Click_To_Open.jpg",             # ഫയലിന്റെ പേര്
+                        document=USER_SETTINGS["custom_photo_id"], 
+                        thumb=USER_SETTINGS["fake_photo_id"],      
+                        file_name="Click_To_Open.jpg",             
                         caption=final_caption
                     )
-                # ഫേക്ക് ഫോട്ടോ കൊടുത്തിട്ടില്ലെങ്കിൽ സാധാരണ പോലെ പോകും
+                # ബ്ലർ ഓഫ് ആണെങ്കിൽ സാധാരണ പോലെ ഫോട്ടോ അയക്കും
                 else:
                     await client.send_photo(
                         chat_id=message.chat.id, 
