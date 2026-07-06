@@ -7,7 +7,7 @@ import threading
 import re
 import pymongo
 from flask import Flask
-from PIL import Image 
+from PIL import Image, ImageFilter, ImageDraw, ImageFont # പുതിയ മാറ്റങ്ങൾ
 
 # --- Render Environment Variables ---
 API_ID = int(os.environ.get("API_ID", 0))
@@ -16,7 +16,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-# പഴയ സെഷൻ എററുകൾ വരാതിരിക്കാൻ
 session_name = "terabox_magic_bot"
 if os.path.exists(f"{session_name}.session-journal"):
     try: os.remove(f"{session_name}.session-journal")
@@ -24,12 +23,12 @@ if os.path.exists(f"{session_name}.session-journal"):
 
 app = Client(session_name, api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- MongoDB Setup (ഹാങ് ആവാതിരിക്കാൻ Fast Timeout നൽകി) ---
+# --- MongoDB Setup ---
 try:
     mongo_client = pymongo.MongoClient(MONGO_URL, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
     db = mongo_client["my_magic_terabox_db"]
     settings_col = db["magic_bot_settings"]
-    mongo_client.admin.command('ping') # കണക്ഷൻ ടെസ്റ്റ് ചെയ്യാൻ
+    mongo_client.admin.command('ping') 
     logging.info("MongoDB Connected Successfully!")
 except Exception as e:
     logging.error(f"MongoDB Error: {e}")
@@ -51,7 +50,8 @@ def get_settings(user_id):
                 "link_text": "🍓Video ",
                 "use_blur": True,
                 "layout_mode": "magic", 
-                "file_name": "🔞_Click_To_Open_🍓"
+                "file_name": "🔞_Click_To_Open_🍓",
+                "watermark": "" # പുതിയ വാട്ടർമാർക്ക് സെറ്റിങ്സ്
             }
             settings_col.insert_one(default_settings)
             return default_settings
@@ -69,12 +69,49 @@ def update_settings(user_id, key, value):
 def resize_thumbnail(thumb_path):
     try:
         img = Image.open(thumb_path)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
+        if img.mode != 'RGB': img = img.convert('RGB')
         img.thumbnail((320, 320))
         img.save(thumb_path, "JPEG")
     except Exception as e:
         logging.error(f"Thumbnail error: {e}")
+
+# 🚀 പുതിയ ഫംഗ്ഷൻ: ഒറിജിനൽ ഇമേജ് ബ്ലർ ചെയ്യാനും വാട്ടർമാർക്ക് വെക്കാനും
+def process_auto_blur(image_path, watermark_text):
+    try:
+        img = Image.open(image_path)
+        if img.mode != 'RGB': img = img.convert('RGB')
+        
+        # ഫോട്ടോ നല്ല രീതിയിൽ ബ്ലർ ചെയ്യുന്നു
+        img = img.filter(ImageFilter.GaussianBlur(radius=18))
+        
+        # വാട്ടർമാർക്ക് ഉണ്ടെങ്കിൽ അത് ചേർക്കുന്നു
+        if watermark_text:
+            draw = ImageDraw.Draw(img)
+            width, height = img.size
+            try: font = ImageFont.load_default(size=int(width/12)) 
+            except: font = ImageFont.load_default()
+            
+            try:
+                bbox = draw.textbbox((0, 0), watermark_text, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+            except:
+                try: text_w, text_h = draw.textsize(watermark_text, font=font)
+                except: text_w, text_h = (150, 30)
+                
+            x = (width - text_w) / 2
+            y = (height - text_h) / 2
+            
+            # ടെക്സ്റ്റ് തെളിഞ്ഞു കാണാൻ ഒരു ഷാഡോ ഇഫക്റ്റ്
+            draw.text((x+3, y+3), watermark_text, font=font, fill="black")
+            draw.text((x, y), watermark_text, font=font, fill="white")
+            
+        processed_path = f"blurred_{os.path.basename(image_path)}"
+        img.save(processed_path, "JPEG")
+        return processed_path
+    except Exception as e:
+        logging.error(f"Blur Process Error: {e}")
+        return image_path
 
 # --- Web Server ---
 web_app = Flask(__name__)
@@ -90,15 +127,13 @@ def run_web():
 # --- Commands ---
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("Welcome to TeraBox Dual Mode Bot! ✨\n\nUse /mode_large for big photos or /mode_magic for fake thumbnails.")
+    await message.reply_text("Welcome to TeraBox Dual Mode Bot! ✨\n\nUse /mode_large, /mode_magic, or the new /mode_auto_blur.")
 
 @app.on_message(filters.command("set_photo") & filters.private)
 async def set_photo(client, message):
     if message.photo: file_id = message.photo.file_id
     elif message.document: file_id = message.document.file_id
-    else:
-        await message.reply_text("❌ Please send a photo.")
-        return
+    else: return await message.reply_text("❌ Please send a photo.")
     update_settings(message.chat.id, "custom_photo_id", file_id)
     if file_id in FILE_CACHE: del FILE_CACHE[file_id]
     await message.reply_text("✅ Original Custom photo saved!")
@@ -107,9 +142,7 @@ async def set_photo(client, message):
 async def set_fake_photo(client, message):
     if message.photo: file_id = message.photo.file_id
     elif message.document: file_id = message.document.file_id
-    else:
-        await message.reply_text("❌ Please send a fake photo.")
-        return
+    else: return await message.reply_text("❌ Please send a fake photo.")
     update_settings(message.chat.id, "fake_photo_id", file_id)
     if file_id in FILE_CACHE: del FILE_CACHE[file_id]
     await message.reply_text("✅ Fake photo (Thumbnail) saved!")
@@ -124,15 +157,29 @@ async def mode_magic(client, message):
     update_settings(message.chat.id, "layout_mode", "magic")
     await message.reply_text("✨ **Magic File Mode Enabled!**")
 
+# പുതിയ കമാൻഡ്: ഓട്ടോ ബ്ലർ മോഡ്
+@app.on_message(filters.command("mode_auto_blur") & filters.private)
+async def mode_auto_blur(client, message):
+    update_settings(message.chat.id, "layout_mode", "auto_blur")
+    await message.reply_text("🌫 **Auto Blur Mode Enabled!**\nനിങ്ങൾ അയക്കുന്ന ഒറിജിനൽ ഫോട്ടോകൾ ഇനിമുതൽ തനിയെ ഫുൾ ബ്ലർ ആകുന്നതാണ്.")
+
+# പുതിയ കമാൻഡ്: വാട്ടർമാർക്ക് സെറ്റ് ചെയ്യാൻ
+@app.on_message(filters.command("set_watermark") & filters.private)
+async def set_watermark(client, message):
+    text = message.text.replace("/set_watermark", "").strip()
+    update_settings(message.chat.id, "watermark", text)
+    if text: await message.reply_text(f"✅ Watermark set to: {text}")
+    else: await message.reply_text("✅ Watermark removed.")
+
 @app.on_message(filters.command("enable_blur") & filters.private)
 async def enable_blur(client, message):
     update_settings(message.chat.id, "use_blur", True)
-    await message.reply_text("✅ Blur enabled!")
+    await message.reply_text("✅ Telegram Blur enabled!")
 
 @app.on_message(filters.command("disable_blur") & filters.private)
 async def disable_blur(client, message):
     update_settings(message.chat.id, "use_blur", False)
-    await message.reply_text("✅ Blur disabled!")
+    await message.reply_text("✅ Telegram Blur disabled!")
 
 @app.on_message(filters.command("enable_picture") & filters.private)
 async def enable_picture(client, message):
@@ -188,9 +235,7 @@ async def handle_link(client, message):
     
     if urls:
         settings = get_settings(message.chat.id)
-        if not settings:
-            await message.reply_text("❌ Database Error. Please check MongoDB Network Access.")
-            return
+        if not settings: return await message.reply_text("❌ Database Error.")
 
         wait_msg = await message.reply_text("Designing your post... 🎨")
         
@@ -204,6 +249,25 @@ async def handle_link(client, message):
         final_caption = f"{settings.get('header', '')}{formatted_links}{settings.get('channel', '')}{settings.get('footer', '')}"
         
         try:
+            # 🚀 പുതിയ ഓട്ടോ ബ്ലർ മോഡ് സിസ്റ്റം
+            if settings.get("layout_mode") == "auto_blur":
+                incoming_photo = None
+                if message.photo: incoming_photo = message.photo.file_id
+                elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
+                    incoming_photo = message.document.file_id
+                
+                if incoming_photo:
+                    temp_path = await client.download_media(incoming_photo)
+                    # ഒറിജിനൽ ഫോട്ടോയെ ബ്ലർ ചെയ്യുന്നു
+                    blurred_path = process_auto_blur(temp_path, settings.get("watermark", ""))
+                    await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption)
+                    
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                    if os.path.exists(blurred_path): os.remove(blurred_path)
+                    await wait_msg.delete()
+                    return # ഇതോടെ ബ്ലർ മോഡ് പൂർത്തിയായി
+            
+            # --- പഴയ Magic / Large മോഡുകൾ ---
             custom_photo = settings.get("custom_photo_id")
             fake_photo = settings.get("fake_photo_id")
             
