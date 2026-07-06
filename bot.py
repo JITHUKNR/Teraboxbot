@@ -1,5 +1,5 @@
 import logging
-logging.basicConfig(level=logging.INFO) # എററുകൾ കൃത്യമായി കണ്ടെത്താൻ
+logging.basicConfig(level=logging.INFO) 
 
 from pyrogram import Client, filters
 import os
@@ -16,7 +16,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-# in_memory=True ബോട്ട് സെഷൻ ലോക്ക് ആവാതിരിക്കാൻ സഹായിക്കുന്നു
 app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # --- MongoDB Setup ---
@@ -27,7 +26,6 @@ try:
 except Exception as e:
     logging.error(f"MongoDB Connection Error: {e}")
 
-# 🚀 പുതിയ മാറ്റം: ഫോട്ടോകൾ റാമിൽ സൂക്ഷിക്കാനുള്ള സ്പീഡ് ബൂസ്റ്റ് കാഷെ
 FILE_CACHE = {}
 
 def get_settings(user_id):
@@ -45,7 +43,7 @@ def get_settings(user_id):
                 "link_text": "🍓Video ",
                 "use_blur": True,
                 "layout_mode": "magic", 
-                "file_name": "🔞_Click_To_Open_🍓.jpg" 
+                "file_name": "🔞_Click_To_Open_🍓" # ഡിഫോൾട്ട് ആയി .jpg ഒഴിവാക്കി
             }
             settings_col.insert_one(default_settings)
             return default_settings
@@ -60,9 +58,12 @@ def update_settings(user_id, key, value):
     except Exception as e:
         logging.error(f"Database Update Error: {e}")
 
+# കളർ ഫോർമാറ്റ് പ്രശ്നങ്ങൾ പരിഹരിക്കാൻ RGB കോഡ് ചേർത്തു
 def resize_thumbnail(thumb_path):
     try:
         img = Image.open(thumb_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
         img.thumbnail((320, 320))
         img.save(thumb_path, "JPEG")
     except Exception as e:
@@ -92,7 +93,6 @@ async def set_photo(client, message):
         await message.reply_text("❌ Please send a photo with /set_photo")
         return
     update_settings(message.chat.id, "custom_photo_id", file_id)
-    # പുതിയ ഫോട്ടോ സെറ്റ് ചെയ്യുമ്പോൾ പഴയ കാഷെ ക്ലിയർ ചെയ്യും
     if file_id in FILE_CACHE: del FILE_CACHE[file_id]
     await message.reply_text("✅ Original Custom photo saved!")
 
@@ -162,15 +162,15 @@ async def set_link_text(client, message):
         update_settings(message.chat.id, "link_text", text + " ")
         await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
 
+# പുതിയ കമാൻഡ്: .jpg തനിയെ വരുന്നത് എടുത്തുകളഞ്ഞു
 @app.on_message(filters.command("set_file_name") & filters.private)
 async def set_file_name(client, message):
     text = message.text.replace("/set_file_name", "").strip()
     if text:
-        if not text.lower().endswith(".jpg"): text += ".jpg"
         update_settings(message.chat.id, "file_name", text)
         await message.reply_text(f"✅ File name set to: {text}")
     else:
-        await message.reply_text("❌ Please provide text. Example: /set_file_name Click.jpg")
+        await message.reply_text("❌ Please provide text. Example: /set_file_name NEW🥵🍓")
 
 # --- Link Extraction & RAM SPEED BOOST Processing ---
 @app.on_message((filters.text | filters.photo) & filters.private)
@@ -203,7 +203,6 @@ async def handle_link(client, message):
             
             if custom_photo and settings.get("enable_picture", True):
                 
-                # 🚀 ഒടുവിൽ ചേർത്ത സ്പീഡ് ബൂസ്റ്റ് സിസ്റ്റം (RAM Cache)
                 doc_path = f"{custom_photo}.jpg"
                 if custom_photo not in FILE_CACHE or not os.path.exists(doc_path):
                     actual_path = await client.download_media(custom_photo)
@@ -211,7 +210,7 @@ async def handle_link(client, message):
                         os.rename(actual_path, doc_path)
                     FILE_CACHE[custom_photo] = doc_path
                 
-                custom_file_name = settings.get("file_name", "🔞_Click_To_Open_🍓.jpg")
+                custom_file_name = settings.get("file_name", "🔞_Click_To_Open_🍓")
                 
                 if settings.get("layout_mode") == "magic":
                     thumb_path = None
@@ -221,7 +220,7 @@ async def handle_link(client, message):
                             actual_thumb = await client.download_media(fake_photo)
                             if os.path.exists(actual_thumb):
                                 os.rename(actual_thumb, thumb_path)
-                            resize_thumbnail(thumb_path) # ആദ്യത്തെ തവണ മാത്രം റീസൈസ് ചെയ്യും
+                            resize_thumbnail(thumb_path) 
                             FILE_CACHE[fake_photo] = thumb_path
                             
                     if settings.get("use_blur", True) and thumb_path:
