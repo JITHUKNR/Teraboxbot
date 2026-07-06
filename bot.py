@@ -1,3 +1,6 @@
+import logging
+logging.basicConfig(level=logging.INFO) # എററുകൾ കൃത്യമായി കണ്ടെത്താൻ
+
 from pyrogram import Client, filters
 import os
 import threading
@@ -13,35 +16,49 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# in_memory=True ബോട്ട് സെഷൻ ലോക്ക് ആവാതിരിക്കാൻ സഹായിക്കുന്നു
+app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # --- MongoDB Setup ---
-mongo_client = pymongo.MongoClient(MONGO_URL)
-db = mongo_client["my_magic_terabox_db"]
-settings_col = db["magic_bot_settings"]
+try:
+    mongo_client = pymongo.MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+    db = mongo_client["my_magic_terabox_db"]
+    settings_col = db["magic_bot_settings"]
+except Exception as e:
+    logging.error(f"MongoDB Connection Error: {e}")
+
+# 🚀 പുതിയ മാറ്റം: ഫോട്ടോകൾ റാമിൽ സൂക്ഷിക്കാനുള്ള സ്പീഡ് ബൂസ്റ്റ് കാഷെ
+FILE_CACHE = {}
 
 def get_settings(user_id):
-    settings = settings_col.find_one({"user_id": user_id})
-    if not settings:
-        default_settings = {
-            "user_id": user_id,
-            "header": "",
-            "footer": "",
-            "channel": "",
-            "custom_photo_id": None,
-            "fake_photo_id": None,
-            "enable_picture": True,
-            "link_text": "🍓Video ",
-            "use_blur": True,
-            "layout_mode": "magic", 
-            "file_name": "🔞_Click_To_Open_🍓.jpg" 
-        }
-        settings_col.insert_one(default_settings)
-        return default_settings
-    return settings
+    try:
+        settings = settings_col.find_one({"user_id": user_id})
+        if not settings:
+            default_settings = {
+                "user_id": user_id,
+                "header": "",
+                "footer": "",
+                "channel": "",
+                "custom_photo_id": None,
+                "fake_photo_id": None,
+                "enable_picture": True,
+                "link_text": "🍓Video ",
+                "use_blur": True,
+                "layout_mode": "magic", 
+                "file_name": "🔞_Click_To_Open_🍓.jpg" 
+            }
+            settings_col.insert_one(default_settings)
+            return default_settings
+        return settings
+    except Exception as e:
+        logging.error(f"Database Fetch Error: {e}")
+        return None
 
 def update_settings(user_id, key, value):
-    settings_col.update_one({"user_id": user_id}, {"$set": {key: value}}, upsert=True)
+    try:
+        settings_col.update_one({"user_id": user_id}, {"$set": {key: value}}, upsert=True)
+    except Exception as e:
+        logging.error(f"Database Update Error: {e}")
 
 def resize_thumbnail(thumb_path):
     try:
@@ -49,14 +66,14 @@ def resize_thumbnail(thumb_path):
         img.thumbnail((320, 320))
         img.save(thumb_path, "JPEG")
     except Exception as e:
-        print(f"Thumbnail resize error: {e}")
+        logging.error(f"Thumbnail resize error: {e}")
 
 # --- Dummy Web Server ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "TeraBox Dual Mode Bot is Running!"
+    return "TeraBox Super Speed Bot is Running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -75,6 +92,8 @@ async def set_photo(client, message):
         await message.reply_text("❌ Please send a photo with /set_photo")
         return
     update_settings(message.chat.id, "custom_photo_id", file_id)
+    # പുതിയ ഫോട്ടോ സെറ്റ് ചെയ്യുമ്പോൾ പഴയ കാഷെ ക്ലിയർ ചെയ്യും
+    if file_id in FILE_CACHE: del FILE_CACHE[file_id]
     await message.reply_text("✅ Original Custom photo saved!")
 
 @app.on_message(filters.command("set_fake_photo") & filters.private)
@@ -85,6 +104,7 @@ async def set_fake_photo(client, message):
         await message.reply_text("❌ Please send a photo with /set_fake_photo")
         return
     update_settings(message.chat.id, "fake_photo_id", file_id)
+    if file_id in FILE_CACHE: del FILE_CACHE[file_id]
     await message.reply_text("✅ Fake photo (Thumbnail) saved!")
 
 @app.on_message(filters.command("mode_large") & filters.private)
@@ -152,7 +172,7 @@ async def set_file_name(client, message):
     else:
         await message.reply_text("❌ Please provide text. Example: /set_file_name Click.jpg")
 
-# --- Link Extraction & SPEED BOOST Processing ---
+# --- Link Extraction & RAM SPEED BOOST Processing ---
 @app.on_message((filters.text | filters.photo) & filters.private)
 async def handle_link(client, message):
     user_text = message.text or message.caption
@@ -164,6 +184,10 @@ async def handle_link(client, message):
         wait_msg = await message.reply_text("Designing your post... 🎨")
         settings = get_settings(message.chat.id)
         
+        if not settings:
+            await wait_msg.edit_text("❌ Database Error. Please check your MongoDB setup.")
+            return
+
         unique_urls = list(dict.fromkeys(urls))
         formatted_links = ""
         link_prefix = settings.get('link_text', '🍓Video ')
@@ -179,21 +203,26 @@ async def handle_link(client, message):
             
             if custom_photo and settings.get("enable_picture", True):
                 
-                # 🚀 SPEED BOOST: ഫയൽ മുൻപ് ഡൗൺലോഡ് ചെയ്തിട്ടില്ലെങ്കിൽ മാത്രം ഡൗൺലോഡ് ചെയ്യുക
+                # 🚀 ഒടുവിൽ ചേർത്ത സ്പീഡ് ബൂസ്റ്റ് സിസ്റ്റം (RAM Cache)
                 doc_path = f"{custom_photo}.jpg"
-                if not os.path.exists(doc_path):
-                    await client.download_media(custom_photo, file_name=doc_path)
-                    
+                if custom_photo not in FILE_CACHE or not os.path.exists(doc_path):
+                    actual_path = await client.download_media(custom_photo)
+                    if os.path.exists(actual_path):
+                        os.rename(actual_path, doc_path)
+                    FILE_CACHE[custom_photo] = doc_path
+                
                 custom_file_name = settings.get("file_name", "🔞_Click_To_Open_🍓.jpg")
                 
                 if settings.get("layout_mode") == "magic":
                     thumb_path = None
                     if fake_photo:
                         thumb_path = f"{fake_photo}.jpg"
-                        # ഫേക്ക് ഫോട്ടോയും ഒരിക്കൽ മാത്രം ഡൗൺലോഡ് ചെയ്ത് റീസൈസ് ചെയ്യുന്നു
-                        if not os.path.exists(thumb_path):
-                            await client.download_media(fake_photo, file_name=thumb_path)
-                            resize_thumbnail(thumb_path)
+                        if fake_photo not in FILE_CACHE or not os.path.exists(thumb_path):
+                            actual_thumb = await client.download_media(fake_photo)
+                            if os.path.exists(actual_thumb):
+                                os.rename(actual_thumb, thumb_path)
+                            resize_thumbnail(thumb_path) # ആദ്യത്തെ തവണ മാത്രം റീസൈസ് ചെയ്യും
+                            FILE_CACHE[fake_photo] = thumb_path
                             
                     if settings.get("use_blur", True) and thumb_path:
                         try:
@@ -210,12 +239,12 @@ async def handle_link(client, message):
                 else:
                     await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True))
                 
-                # ശ്രദ്ധിക്കുക: സ്പീഡ് കൂട്ടാൻ വേണ്ടി ഫയലുകൾ ഡിലീറ്റ് ചെയ്യുന്ന വരി (os.remove) നമ്മൾ ഒഴിവാക്കി.
                 await wait_msg.delete()
             else:
                 await wait_msg.edit_text(final_caption)
                 
         except Exception as e:
+            logging.error(f"Send Error: {e}")
             await wait_msg.edit_text(f"❌ System Error: {str(e)}")
             
     elif not user_text.startswith("/"):
@@ -223,5 +252,5 @@ async def handle_link(client, message):
 
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-    print("Dual Mode Bot (Speed Boosted) is running...")
+    print("Super Speed Bot is running smoothly...")
     app.run()
