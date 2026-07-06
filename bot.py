@@ -4,6 +4,7 @@ import threading
 import re
 import pymongo
 from flask import Flask
+from PIL import Image  # ഫോട്ടോ റീസൈസ് ചെയ്യാൻ ചേർത്തത്
 
 # --- Render Environment Variables ---
 API_ID = int(os.environ.get("API_ID", 0))
@@ -32,7 +33,8 @@ def get_settings(user_id):
             "enable_picture": True,
             "link_text": "🍓Video ",
             "use_blur": True,
-            "layout_mode": "large" # പുതിയ ഡ്യുവൽ മോഡ് സെറ്റിങ്സ്
+            "layout_mode": "magic", # പുതിയ ഡ്യുവൽ മോഡ് സെറ്റിങ്സ്
+            "file_name": "🔞_Click_To_Open_🍓.jpg" # ഫയൽ നെയിം ഡിഫോൾട്ട്
         }
         settings_col.insert_one(default_settings)
         return default_settings
@@ -40,6 +42,15 @@ def get_settings(user_id):
 
 def update_settings(user_id, key, value):
     settings_col.update_one({"user_id": user_id}, {"$set": {key: value}}, upsert=True)
+
+# ഫേക്ക് ഫോട്ടോ ടെലിഗ്രാമിന് സപ്പോർട്ട് ചെയ്യുന്ന രീതിയിൽ (320x320) ചെറുതാക്കാനുള്ള ഫംഗ്ഷൻ
+def resize_thumbnail(thumb_path):
+    try:
+        img = Image.open(thumb_path)
+        img.thumbnail((320, 320))
+        img.save(thumb_path, "JPEG")
+    except Exception as e:
+        print(f"Thumbnail resize error: {e}")
 
 # --- Dummy Web Server ---
 web_app = Flask(__name__)
@@ -81,7 +92,7 @@ async def set_fake_photo(client, message):
     update_settings(message.chat.id, "fake_photo_id", file_id)
     await message.reply_text("✅ Fake photo (Thumbnail) saved!")
 
-# --- പുതിയ ഡ്യുവൽ മോഡ് കമാൻഡുകൾ ---
+# --- ഡ്യുവൽ മോഡ് കമാൻഡുകൾ ---
 @app.on_message(filters.command("mode_large") & filters.private)
 async def mode_large(client, message):
     update_settings(message.chat.id, "layout_mode", "large")
@@ -101,6 +112,18 @@ async def enable_blur(client, message):
 async def disable_blur(client, message):
     update_settings(message.chat.id, "use_blur", False)
     await message.reply_text("✅ Blur disabled!")
+
+# പഴയ ഫീച്ചർ തിരികെ ചേർത്തു
+@app.on_message(filters.command("enable_picture") & filters.private)
+async def enable_picture(client, message):
+    update_settings(message.chat.id, "enable_picture", True)
+    await message.reply_text("✅ Picture enabled.")
+
+# പഴയ ഫീച്ചർ തിരികെ ചേർത്തു
+@app.on_message(filters.command("disable_picture") & filters.private)
+async def disable_picture(client, message):
+    update_settings(message.chat.id, "enable_picture", False)
+    await message.reply_text("✅ Picture disabled.")
 
 @app.on_message(filters.command("add_header") & filters.private)
 async def add_header(client, message):
@@ -126,6 +149,19 @@ async def set_link_text(client, message):
     if text:
         update_settings(message.chat.id, "link_text", text + " ")
         await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
+
+# പുതിയ കമാൻഡ്: ഫയലിന്റെ പേര് മാറ്റാൻ
+@app.on_message(filters.command("set_file_name") & filters.private)
+async def set_file_name(client, message):
+    text = message.text.replace("/set_file_name", "").strip()
+    if text:
+        # അവസാനം .jpg ഇല്ലെങ്കിൽ ചേർക്കാൻ
+        if not text.lower().endswith(".jpg"):
+            text += ".jpg"
+        update_settings(message.chat.id, "file_name", text)
+        await message.reply_text(f"✅ File name set to: {text}")
+    else:
+        await message.reply_text("❌ Please provide text. Example: /set_file_name Click_To_Open.jpg")
 
 # --- Link Extraction & Dual Mode Processing ---
 @app.on_message((filters.text | filters.photo) & filters.private)
@@ -154,25 +190,31 @@ async def handle_link(client, message):
             
             if custom_photo and settings.get("enable_picture", True):
                 doc_path = await client.download_media(custom_photo)
+                custom_file_name = settings.get("file_name", "🔞_Click_To_Open_🍓.jpg")
                 
                 # --- Mode 1: മാജിക് ഫയൽ മോഡ് (ചെറിയ ഫയൽ + ഫേക്ക് ഫോട്ടോ) ---
                 if settings.get("layout_mode") == "magic":
                     thumb_path = await client.download_media(fake_photo) if fake_photo else None
+                    
+                    if thumb_path:
+                        # ടെലിഗ്രാമിന് സപ്പോർട്ട് ചെയ്യുന്ന രീതിയിൽ ഫേക്ക് ഫോട്ടോ ചെറുതാക്കുന്നു
+                        resize_thumbnail(thumb_path)
+                        
                     if settings.get("use_blur", True) and thumb_path:
                         try:
                             await client.send_document(
                                 chat_id=message.chat.id, 
                                 document=doc_path, 
                                 thumbnail=thumb_path, 
-                                file_name="🔞_Click_To_Open_🍓.jpg", # ആകർഷകമായ പേര്
+                                file_name=custom_file_name, 
                                 caption=final_caption
                             )
                         except TypeError:
                             await client.send_document(
-                                chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name="🔞_Click_To_Open_🍓.jpg", caption=final_caption
+                                chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption
                             )
                     else:
-                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name="🔞_Click_To_Open_🍓.jpg", caption=final_caption)
+                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name=custom_file_name, caption=final_caption)
                     if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
                 
                 # --- Mode 2: വലിയ ഫോട്ടോ മോഡ് (വലിയ സൈസ് + ഒഫീഷ്യൽ ബ്ലർ) ---
