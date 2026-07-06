@@ -12,16 +12,18 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# യൂസറുടെ സെറ്റിങ്സുകൾ സേവ് ചെയ്തു വെക്കാൻ
+# User Settings 
 USER_SETTINGS = {
     "header": "",
     "footer": "",
     "channel": "",
     "custom_photo_id": None,
-    "enable_picture": True
+    "enable_picture": True,
+    "link_text": "🍓Video ",
+    "use_blur": True # ബ്ലർ ചെയ്യാൻ വേണ്ടി പുതിയതായി ചേർത്തത്
 }
 
-# --- Dummy Web Server (UptimeRobot-ന് വേണ്ടി) ---
+# --- Dummy Web Server (For UptimeRobot) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -36,86 +38,109 @@ def run_web():
 # --- Commands ---
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("ഹലോ! നിങ്ങളുടെ കസ്റ്റം TeraBox ബോട്ട് റെഡി.\n\nഒഫീഷ്യൽ ബോട്ടിൽ നിന്നും കൺവെർട്ട് ചെയ്തു കിട്ടുന്ന മെസ്സേജ് ഇങ്ങോട്ട് ഫോർവേഡ് ചെയ്യുകയോ പേസ്റ്റ് ചെയ്യുകയോ ചെയ്യുക.")
+    await message.reply_text("Hello! Your custom TeraBox formatting bot is ready.\n\nForward or paste the converted messages from the official bot here.")
 
 @app.on_message(filters.command("set_photo") & filters.private)
 async def set_photo(client, message):
     if message.photo:
         USER_SETTINGS["custom_photo_id"] = message.photo.file_id
         USER_SETTINGS["enable_picture"] = True
-        await message.reply_text("✅ കസ്റ്റം ഫോട്ടോ സെറ്റ് ചെയ്തു!")
+        await message.reply_text("✅ Custom photo set successfully!")
     else:
-        await message.reply_text("❌ ദയവായി ഒരു ഫോട്ടോയോടൊപ്പം /set_photo എന്ന് അയക്കുക.")
+        await message.reply_text("❌ Please send a photo along with the /set_photo command.")
 
 @app.on_message(filters.command("add_header") & filters.private)
 async def add_header(client, message):
     text = message.text.replace("/add_header", "").strip()
     USER_SETTINGS["header"] = text + "\n\n" if text else ""
-    await message.reply_text(f"✅ ഹെഡർ സെറ്റ് ചെയ്തു:\n{text}" if text else "❌ കമാൻഡിനൊപ്പം ടെക്സ്റ്റ് നൽകുക.")
+    await message.reply_text(f"✅ Header set to:\n{text}" if text else "❌ Please provide text with the command.")
 
 @app.on_message(filters.command("add_footer") & filters.private)
 async def add_footer(client, message):
     text = message.text.replace("/add_footer", "").strip()
     USER_SETTINGS["footer"] = "\n\n" + text if text else ""
-    await message.reply_text(f"✅ ഫൂട്ടർ സെറ്റ് ചെയ്തു:\n{text}" if text else "❌ കമാൻഡിനൊപ്പം ടെക്സ്റ്റ് നൽകുക.")
+    await message.reply_text(f"✅ Footer set to:\n{text}" if text else "❌ Please provide text with the command.")
 
 @app.on_message(filters.command("channel") & filters.private)
 async def set_channel(client, message):
     text = message.text.replace("/channel", "").strip()
     if text:
-        USER_SETTINGS["channel"] = f"\n\n📢 ജോയിൻ: {text}"
-        await message.reply_text(f"✅ ചാനൽ സെറ്റ് ചെയ്തു: {text}")
+        USER_SETTINGS["channel"] = f"\n📢 Join: {text}"
+        await message.reply_text(f"✅ Channel set to: {text}")
     else:
-        await message.reply_text("❌ കമാൻഡിനൊപ്പം ചാനൽ ലിങ്ക് കൂടി നൽകുക.")
+        await message.reply_text("❌ Please provide a channel link or username.")
+
+@app.on_message(filters.command("set_link_text") & filters.private)
+async def set_link_text(client, message):
+    text = message.text.replace("/set_link_text", "").strip()
+    if text:
+        USER_SETTINGS["link_text"] = text + " "
+        await message.reply_text(f"✅ Link text set to: {text} 1, {text} 2, etc.")
+    else:
+        await message.reply_text("❌ Please provide text. Example: /set_link_text 🎬 Episode")
 
 @app.on_message(filters.command("disable_picture") & filters.private)
 async def disable_picture(client, message):
     USER_SETTINGS["enable_picture"] = False
-    await message.reply_text("✅ ഫോട്ടോ ഒഴിവാക്കി. ഇനി ടെക്സ്റ്റ് മാത്രമേ വരൂ.")
+    await message.reply_text("✅ Picture disabled. Only text will be sent.")
 
 @app.on_message(filters.command("enable_picture") & filters.private)
 async def enable_picture(client, message):
     USER_SETTINGS["enable_picture"] = True
-    await message.reply_text("✅ ഫോട്ടോ ഓൺ ആക്കി.")
+    await message.reply_text("✅ Picture enabled.")
 
-# --- Link Extraction & Formatting (ഇവിടെയാണ് മാറ്റം വരുത്തിയത്) ---
-# filters.text ന് പകരം ഫോട്ടോയും ക്യാപ്ഷനും കൂടി ഉൾപ്പെടുത്തി
+# --- പുതിയ ബ്ലർ കമാൻഡുകൾ ---
+@app.on_message(filters.command("enable_blur") & filters.private)
+async def enable_blur(client, message):
+    USER_SETTINGS["use_blur"] = True
+    await message.reply_text("✅ Blur (Spoiler) enabled. ഫോട്ടോകൾ ബ്ലർ ആയിട്ട് പോകും.")
+
+@app.on_message(filters.command("disable_blur") & filters.private)
+async def disable_blur(client, message):
+    USER_SETTINGS["use_blur"] = False
+    await message.reply_text("✅ Blur disabled. ഫോട്ടോകൾ സാധാരണ പോലെ പോകും.")
+
+# --- Link Extraction & Multiple Link Formatting ---
 @app.on_message((filters.text | filters.photo) & filters.private)
 async def handle_link(client, message):
-    # മെസ്സേജ് ടെക്സ്റ്റ് ആണെങ്കിലും ഫോട്ടോയുടെ ക്യാപ്ഷൻ ആണെങ്കിലും അത് വേർതിരിച്ചെടുക്കുന്നു
     user_text = message.text or message.caption
     
     if not user_text:
         return
     
-    # മെസ്സേജിൽ നിന്നും Terabox/Terashare ലിങ്ക് മാത്രം യാതൊരു മാറ്റവുമില്ലാതെ വലിച്ചെടുക്കുന്നു
-    url_match = re.search(r"(https?://\S*(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
+    urls = re.findall(r"(https?://\S*(?:terabox|terashare)\S*)", user_text, re.IGNORECASE)
     
-    if url_match:
-        wait_msg = await message.reply_text("ഡിസൈൻ തയ്യാറാക്കുന്നു... 🎨")
-        extracted_link = url_match.group(1) 
+    if urls:
+        wait_msg = await message.reply_text("Preparing your post... ⏳")
+        
+        unique_urls = list(dict.fromkeys(urls))
+        
+        formatted_links = ""
+        for index, url in enumerate(unique_urls, start=1):
+            formatted_links += f"{USER_SETTINGS['link_text']}{index}\n{url}\n\n\n"
+            
+        formatted_links = formatted_links.strip()
         
         try:
-            # പുതിയ ക്യാപ്ഷൻ നിർമ്മിക്കുന്നു
-            final_caption = f"{USER_SETTINGS['header']}🔗 ലിങ്ക്: {extracted_link}{USER_SETTINGS['channel']}{USER_SETTINGS['footer']}"
+            final_caption = f"{USER_SETTINGS['header']}{formatted_links}{USER_SETTINGS['channel']}{USER_SETTINGS['footer']}"
             
-            # കസ്റ്റം ഫോട്ടോ വെച്ച് അയക്കുന്നു
             if USER_SETTINGS["enable_picture"] and USER_SETTINGS["custom_photo_id"]:
                 await client.send_photo(
                     chat_id=message.chat.id, 
                     photo=USER_SETTINGS["custom_photo_id"], 
-                    caption=final_caption
+                    caption=final_caption,
+                    has_spoiler=USER_SETTINGS["use_blur"] # ഈ ഭാഗത്താണ് ബ്ലർ കൊടുത്തിരിക്കുന്നത്
                 )
                 await wait_msg.delete()
             else:
                 await wait_msg.edit_text(final_caption)
                 
         except Exception as e:
-            await wait_msg.edit_text("❌ എറർ സംഭവിച്ചു. ദയവായി വീണ്ടും ശ്രമിക്കുക.")
+            await wait_msg.edit_text("❌ An error occurred. Please try again.")
     elif not user_text.startswith("/"):
-        await message.reply_text("ദയവായി ഒഫീഷ്യൽ ബോട്ടിൽ നിന്നുള്ള മെസ്സേജ് (അല്ലെങ്കിൽ ലിങ്ക്) ഇങ്ങോട്ട് അയക്കുക.")
+        await message.reply_text("Please forward a message containing Terabox links.")
 
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-    print("ബോട്ട് റൺ ചെയ്യുന്നുണ്ട്...")
+    print("Bot is running...")
     app.run()
