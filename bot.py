@@ -16,7 +16,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-# 🚀 സെഷൻ ലോക്ക് ആവാതിരിക്കാൻ in_memory=True ഇവിടെ ചേർത്തിട്ടുണ്ട്
+# സെഷൻ ലോക്ക് ആവാതിരിക്കാൻ in_memory=True
 app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # --- MongoDB Setup ---
@@ -29,7 +29,6 @@ try:
 except Exception as e:
     logging.error(f"MongoDB Error: {e}")
 
-# 🚀 റാമിൽ ഫോട്ടോ സൂക്ഷിക്കാനുള്ള സ്പീഡ് ബൂസ്റ്റ് കാഷെ
 FILE_CACHE = {}
 
 def get_settings(user_id):
@@ -72,7 +71,6 @@ def resize_thumbnail(thumb_path):
     except Exception as e:
         logging.error(f"Thumbnail error: {e}")
 
-# 🚀 ഒറിജിനൽ ഇമേജ് ബ്ലർ ചെയ്യാനും വാട്ടർമാർക്ക് വെക്കാനുമുള്ള ഫംഗ്ഷൻ
 def process_auto_blur(image_path, watermark_text):
     try:
         img = Image.open(image_path)
@@ -91,7 +89,7 @@ def process_auto_blur(image_path, watermark_text):
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
             except:
-                try: text_w, text_h = draw.textsize(watermark_text, font=font)
+                try: text_w, text_h = draw.textlength(watermark_text, font=font), 30
                 except: text_w, text_h = (150, 30)
                 
             x = (width - text_w) / 2
@@ -107,7 +105,7 @@ def process_auto_blur(image_path, watermark_text):
         logging.error(f"Blur Process Error: {e}")
         return image_path
 
-# --- Web Server (ബോട്ട് ഉറങ്ങാതിരിക്കാൻ സഹായിക്കുന്നത്) ---
+# --- Web Server ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -235,13 +233,13 @@ async def handle_link(client, message):
         formatted_links = ""
         link_prefix = settings.get('link_text', '🍓Video ')
         for index, url in enumerate(unique_urls, start=1):
-            formatted_links += f"{link_links if 'link_links' in locals() else link_prefix}{index}\n{url}\n\n\n"
+            # ഇവിടെയുണ്ടായിരുന്ന ചെറിയ പിഴവ് തിരുത്തിയിട്ടുണ്ട്
+            formatted_links += f"{link_prefix}{index}\n{url}\n\n\n"
         formatted_links = formatted_links.strip()
         
         final_caption = f"{settings.get('header', '')}{formatted_links}{settings.get('channel', '')}{settings.get('footer', '')}"
         
         try:
-            # 🚀 ഓട്ടോ ബ്ലർ മോഡ് സിസ്റ്റം
             if settings.get("layout_mode") == "auto_blur":
                 incoming_photo = None
                 if message.photo: incoming_photo = message.photo.file_id
