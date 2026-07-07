@@ -215,8 +215,8 @@ async def set_file_name(client, message):
     else:
         await message.reply_text("❌ Example: /set_file_name NEW🥵🍓")
 
-# --- Link Extraction ---
-@app.on_message((filters.text | filters.photo) & filters.private)
+# --- Link Extraction (വീഡിയോ സപ്പോർട്ട് ഉൾപ്പെടെ) ---
+@app.on_message((filters.text | filters.photo | filters.video | filters.animation | filters.document) & filters.private)
 async def handle_link(client, message):
     user_text = message.text or message.caption
     if not user_text: return
@@ -233,7 +233,6 @@ async def handle_link(client, message):
         formatted_links = ""
         link_prefix = settings.get('link_text', '🍓Video ')
         for index, url in enumerate(unique_urls, start=1):
-            # ഇവിടെയുണ്ടായിരുന്ന ചെറിയ പിഴവ് തിരുത്തിയിട്ടുണ്ട്
             formatted_links += f"{link_prefix}{index}\n{url}\n\n\n"
         formatted_links = formatted_links.strip()
         
@@ -241,20 +240,33 @@ async def handle_link(client, message):
         
         try:
             if settings.get("layout_mode") == "auto_blur":
-                incoming_photo = None
-                if message.photo: incoming_photo = message.photo.file_id
-                elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
-                    incoming_photo = message.document.file_id
+                incoming_media = None
                 
-                if incoming_photo:
-                    temp_path = await client.download_media(incoming_photo)
-                    blurred_path = process_auto_blur(temp_path, settings.get("watermark", ""))
-                    await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption)
-                    
-                    if os.path.exists(temp_path): os.remove(temp_path)
-                    if os.path.exists(blurred_path): os.remove(blurred_path)
+                # ഫോട്ടോ ആണെങ്കിൽ
+                if message.photo: 
+                    incoming_media = message.photo.file_id
+                # വീഡിയോ ആണെങ്കിൽ അതിന്റെ കവർ ഫോട്ടോ എടുക്കുന്നു
+                elif message.video and message.video.thumbs:
+                    incoming_media = message.video.thumbs[0].file_id
+                elif message.animation and message.animation.thumbs:
+                    incoming_media = message.animation.thumbs[0].file_id
+                # ഡോക്യുമെന്റ് ആയിട്ടുള്ള ഇമേജ് ആണെങ്കിൽ
+                elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
+                    incoming_media = message.document.file_id
+                
+                if incoming_media:
+                    temp_path = await client.download_media(incoming_media)
+                    if temp_path:
+                        blurred_path = process_auto_blur(temp_path, settings.get("watermark", ""))
+                        await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption)
+                        
+                        if os.path.exists(temp_path): os.remove(temp_path)
+                        if os.path.exists(blurred_path): os.remove(blurred_path)
                     await wait_msg.delete()
                     return 
+                else:
+                    await wait_msg.edit_text("❌ ഈ വീഡിയോയ്ക്ക് കവർ ഫോട്ടോ ലഭ്യമല്ലാത്തതിനാൽ ഓട്ടോ-ബ്ലർ ചെയ്യാൻ കഴിയില്ല. ദയവായി കസ്റ്റം ഫോട്ടോ മോഡ് ഉപയോഗിക്കുക.")
+                    return
             
             custom_photo = settings.get("custom_photo_id")
             fake_photo = settings.get("fake_photo_id")
