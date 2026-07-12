@@ -16,8 +16,12 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URL = os.environ.get("MONGO_URL", "") 
 # ------------------------------------
 
-# സെഷൻ ലോക്ക് ആവാതിരിക്കാൻ in_memory=True
-app = Client("my_terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+session_name = "terabox_magic_bot"
+if os.path.exists(f"{session_name}.session-journal"):
+    try: os.remove(f"{session_name}.session-journal")
+    except: pass
+
+app = Client(session_name, api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # --- MongoDB Setup ---
 try:
