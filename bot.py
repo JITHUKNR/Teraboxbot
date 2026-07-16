@@ -6,6 +6,7 @@ import os
 import threading
 import re
 import pymongo
+import urllib.request
 from flask import Flask
 from PIL import Image, ImageFilter, ImageDraw, ImageFont 
 
@@ -35,6 +36,15 @@ except Exception as e:
 
 FILE_CACHE = {}
 
+# സിനിമാറ്റിക് വെബ് ഫോണ്ടുകളുടെ ലിസ്റ്റ്
+FONTS = {
+    "1": {"name": "Roboto Black", "url": "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Black.ttf"},
+    "2": {"name": "Montserrat Bold", "url": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf"},
+    "3": {"name": "Bebas Neue", "url": "https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf"},
+    "4": {"name": "Anton", "url": "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf"},
+    "5": {"name": "Oswald Bold", "url": "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf"}
+}
+
 def get_settings(user_id):
     try:
         settings = settings_col.find_one({"user_id": user_id})
@@ -51,7 +61,15 @@ def get_settings(user_id):
                 "use_blur": True,
                 "layout_mode": "magic", 
                 "file_name": "🔞_Click_To_Open_🍓",
-                "watermark": "" 
+                "watermark": "",
+                # പുതിയ എഡിറ്റിംഗ് ഫീച്ചറുകൾ
+                "play_icon": False,
+                "vignette": False,
+                "tint_color": "none",
+                "font_choice": "0",
+                "text_color": "white",
+                "glow": True,
+                "badge_text": "none"
             }
             settings_col.insert_one(default_settings)
             return default_settings
@@ -75,18 +93,73 @@ def resize_thumbnail(thumb_path):
     except Exception as e:
         logging.error(f"Thumbnail error: {e}")
 
-def process_auto_blur(image_path, watermark_text):
+# പൂർണ്ണമായും അപ്ഡേറ്റ് ചെയ്ത പുതിയ പ്രൊഫഷണൽ എഡിറ്റിംഗ് സിസ്റ്റം
+def process_auto_blur(image_path, settings):
     try:
-        img = Image.open(image_path)
-        if img.mode != 'RGB': img = img.convert('RGB')
+        img = Image.open(image_path).convert('RGBA')
+        w, h = img.size
         
+        # 1. ബ്ലർ എഫക്റ്റ് (Blur)
         img = img.filter(ImageFilter.GaussianBlur(radius=18))
         
+        # 2. കളർ ടിന്റ് (Color Wash/Tint)
+        tint = settings.get("tint_color", "none")
+        if tint.lower() != "none":
+            try:
+                overlay = Image.new('RGBA', img.size, tint)
+                overlay.putalpha(60) # Opacity
+                img = Image.alpha_composite(img, overlay)
+            except Exception as e:
+                logging.error(f"Tint error: {e}")
+                
+        # 3. സിനിമാറ്റിക് വിഗ്നെറ്റ് (Dark Edges)
+        if settings.get("vignette", False):
+            try:
+                mask = Image.new('L', img.size, 255)
+                draw_mask = ImageDraw.Draw(mask)
+                draw_mask.ellipse((w*0.1, h*0.1, w*0.9, h*0.9), fill=0)
+                mask = mask.filter(ImageFilter.GaussianBlur(radius=int(min(w,h)/3)))
+                dark_overlay = Image.new('RGBA', img.size, (0,0,0,200))
+                img.paste(dark_overlay, mask=mask)
+            except: pass
+            
+        draw = ImageDraw.Draw(img)
+        
+        # 4. പ്ലേ ബട്ടൺ ഐക്കൺ (Play Button)
+        if settings.get("play_icon", False):
+            try:
+                r = min(w, h) // 8
+                cx, cy = w // 2, h // 2
+                
+                # ട്രാൻസ്പരന്റ് ആയ വട്ടം
+                circle_overlay = Image.new('RGBA', img.size, (0,0,0,0))
+                c_draw = ImageDraw.Draw(circle_overlay)
+                c_draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(0,0,0,140))
+                img = Image.alpha_composite(img, circle_overlay)
+                draw = ImageDraw.Draw(img) 
+                
+                # വെള്ള ത്രികോണം
+                tr_pts = [(cx - r/3.5, cy - r/2.5), (cx + r/1.8, cy), (cx - r/3.5, cy + r/2.5)]
+                draw.polygon(tr_pts, fill="white")
+            except: pass
+
+        # 5. വാട്ടർമാർക്ക് ടെക്സ്റ്റും ഫോണ്ടും (Custom Text, Font, Color, Glow)
+        watermark_text = settings.get("watermark", "")
         if watermark_text:
-            draw = ImageDraw.Draw(img)
-            width, height = img.size
-            try: font = ImageFont.load_default(size=int(width/12)) 
-            except: font = ImageFont.load_default()
+            font_choice = settings.get("font_choice", "0")
+            font = None
+            try:
+                font_size = int(w / 12)
+                if font_choice in FONTS:
+                    font_path = f"font_{font_choice}.ttf"
+                    if not os.path.exists(font_path):
+                        urllib.request.urlretrieve(FONTS[font_choice]["url"], font_path)
+                    font = ImageFont.truetype(font_path, font_size)
+                else:
+                    font = ImageFont.load_default(size=font_size)
+            except:
+                try: font = ImageFont.load_default(size=int(w/12))
+                except: font = ImageFont.load_default()
             
             try:
                 bbox = draw.textbbox((0, 0), watermark_text, font=font)
@@ -94,15 +167,47 @@ def process_auto_blur(image_path, watermark_text):
                 text_h = bbox[3] - bbox[1]
             except:
                 try: text_w, text_h = draw.textlength(watermark_text, font=font), 30
-                except: text_w, text_h = (150, 30)
+                except: text_w, text_h = 150, 30
                 
-            x = (width - text_w) / 2
-            y = (height - text_h) / 2
+            x = (w - text_w) / 2
+            if settings.get("play_icon", False):
+                y = (h / 2) + (min(w,h) // 8) + 20 
+            else:
+                y = (h - text_h) / 2
+                
+            text_color = settings.get("text_color", "white")
             
-            draw.text((x+3, y+3), watermark_text, font=font, fill="black")
-            draw.text((x, y), watermark_text, font=font, fill="white")
-            
+            # ഗ്ലോ എഫക്റ്റ് (Outline)
+            if settings.get("glow", True):
+                thickness = max(2, int(w/250))
+                for dx in [-thickness, 0, thickness]:
+                    for dy in [-thickness, 0, thickness]:
+                        draw.text((x+dx, y+dy), watermark_text, font=font, fill="black")
+                        
+            # യഥാർത്ഥ കളർ ടെക്സ്റ്റ്
+            try: draw.text((x, y), watermark_text, font=font, fill=text_color)
+            except: draw.text((x, y), watermark_text, font=font, fill="white") 
+
+        # 6. കോർണർ ബാഡ്ജ് (Corner Badge - HD, 18+ etc)
+        badge = settings.get("badge_text", "none")
+        if badge.lower() != "none":
+            try:
+                try: b_font = ImageFont.truetype("font_1.ttf", max(20, int(w/25))) 
+                except: b_font = ImageFont.load_default()
+                
+                bbox = draw.textbbox((0, 0), badge, font=b_font)
+                bw = bbox[2] - bbox[0]
+                bh = bbox[3] - bbox[1]
+                pad = int(w/50)
+                
+                bx1 = w - bw - (pad*3)
+                by1 = pad
+                draw.rounded_rectangle((bx1, by1, bx1+bw+(pad*2), by1+bh+(pad*2)), radius=pad, fill="#E50914") # Netflix Red
+                draw.text((bx1+pad, by1+pad), badge, font=b_font, fill="white")
+            except: pass
+
         processed_path = f"blurred_{os.path.basename(image_path)}"
+        img = img.convert('RGB')
         img.save(processed_path, "JPEG")
         return processed_path
     except Exception as e:
@@ -219,7 +324,85 @@ async def set_file_name(client, message):
     else:
         await message.reply_text("❌ Example: /set_file_name NEW🥵🍓")
 
-# --- Link Extraction (വീഡിയോ സപ്പോർട്ട് ഉൾപ്പെടെ) ---
+# ================= പുതിയ ഡിസൈൻ കമാൻഡുകൾ =================
+
+@app.on_message(filters.command("enable_play_icon") & filters.private)
+async def enable_play_icon(client, message):
+    update_settings(message.chat.id, "play_icon", True)
+    await message.reply_text("▶️ **Play Icon Enabled!** ഫോട്ടോയുടെ നടുവിൽ പ്ലേ ബട്ടൺ വരുന്നതാണ്.")
+
+@app.on_message(filters.command("disable_play_icon") & filters.private)
+async def disable_play_icon(client, message):
+    update_settings(message.chat.id, "play_icon", False)
+    await message.reply_text("❌ **Play Icon Disabled.**")
+
+@app.on_message(filters.command("enable_vignette") & filters.private)
+async def enable_vignette(client, message):
+    update_settings(message.chat.id, "vignette", True)
+    await message.reply_text("🌑 **Cinematic Vignette Enabled!** ഫോട്ടോയുടെ അരികുകൾ ഇരുണ്ടതായിരിക്കും.")
+
+@app.on_message(filters.command("disable_vignette") & filters.private)
+async def disable_vignette(client, message):
+    update_settings(message.chat.id, "vignette", False)
+    await message.reply_text("❌ **Vignette Disabled.**")
+
+@app.on_message(filters.command("enable_glow") & filters.private)
+async def enable_glow(client, message):
+    update_settings(message.chat.id, "glow", True)
+    await message.reply_text("✨ **Text Glow/Outline Enabled!**")
+
+@app.on_message(filters.command("disable_glow") & filters.private)
+async def disable_glow(client, message):
+    update_settings(message.chat.id, "glow", False)
+    await message.reply_text("❌ **Text Glow Disabled.**")
+
+@app.on_message(filters.command("set_color") & filters.private)
+async def set_color(client, message):
+    text = message.text.replace("/set_color", "").strip()
+    if text:
+        update_settings(message.chat.id, "text_color", text)
+        await message.reply_text(f"🎨 ടെക്സ്റ്റ് കളർ മാറ്റിയത്: {text}")
+    else:
+        await message.reply_text("❌ ഉദാഹരണം: /set_color red അല്ലെങ്കിൽ /set_color #FFD700")
+
+@app.on_message(filters.command("set_tint") & filters.private)
+async def set_tint(client, message):
+    text = message.text.replace("/set_tint", "").strip()
+    if text:
+        update_settings(message.chat.id, "tint_color", text)
+        await message.reply_text(f"🌈 കളർ ടിന്റ് മാറ്റിയത്: {text} (ഒഴിവാക്കാൻ /set_tint none എന്ന് നൽകുക)")
+    else:
+        await message.reply_text("❌ ഉദാഹരണം: /set_tint blue")
+
+@app.on_message(filters.command("set_badge") & filters.private)
+async def set_badge(client, message):
+    text = message.text.replace("/set_badge", "").strip()
+    if text:
+        update_settings(message.chat.id, "badge_text", text)
+        await message.reply_text(f"🏷️ കോർണർ ബാഡ്ജ് മാറ്റിയത്: {text} (ഒഴിവാക്കാൻ /set_badge none എന്ന് നൽകുക)")
+    else:
+        await message.reply_text("❌ ഉദാഹരണം: /set_badge 18+ അല്ലെങ്കിൽ /set_badge HD")
+
+@app.on_message(filters.command("font_list") & filters.private)
+async def font_list(client, message):
+    msg = "📜 **ലഭ്യമായ സിനിമാറ്റിക് ഫോണ്ടുകൾ:**\n\n"
+    for key, val in FONTS.items():
+        msg += f"{key}. {val['name']}\n"
+    msg += "\nഇതിൽ നിന്നും നിങ്ങൾക്ക് വേണ്ട ഫോണ്ടിന്റെ നമ്പർ ടൈപ്പ് ചെയ്യുക. \nഉദാഹരണം: `/set_font 1` (പഴയതുപോലെ ആക്കാൻ `/set_font 0`)"
+    await message.reply_text(msg)
+
+@app.on_message(filters.command("set_font") & filters.private)
+async def set_font(client, message):
+    text = message.text.replace("/set_font", "").strip()
+    if text:
+        update_settings(message.chat.id, "font_choice", text)
+        await message.reply_text(f"🖋️ ഫോണ്ട് സ്റ്റൈൽ {text} ലേക്ക് മാറ്റിയിരിക്കുന്നു!")
+    else:
+        await message.reply_text("❌ ഉദാഹരണം: /set_font 1")
+
+# =======================================================
+
+# --- Link Extraction ---
 @app.on_message((filters.text | filters.photo | filters.video | filters.animation | filters.document) & filters.private)
 async def handle_link(client, message):
     user_text = message.text or message.caption
@@ -246,22 +429,20 @@ async def handle_link(client, message):
             if settings.get("layout_mode") == "auto_blur":
                 incoming_media = None
                 
-                # ഫോട്ടോ ആണെങ്കിൽ
                 if message.photo: 
                     incoming_media = message.photo.file_id
-                # വീഡിയോ ആണെങ്കിൽ അതിന്റെ കവർ ഫോട്ടോ എടുക്കുന്നു
                 elif message.video and message.video.thumbs:
                     incoming_media = message.video.thumbs[0].file_id
                 elif message.animation and message.animation.thumbs:
                     incoming_media = message.animation.thumbs[0].file_id
-                # ഡോക്യുമെന്റ് ആയിട്ടുള്ള ഇമേജ് ആണെങ്കിൽ
                 elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
                     incoming_media = message.document.file_id
                 
                 if incoming_media:
                     temp_path = await client.download_media(incoming_media)
                     if temp_path:
-                        blurred_path = process_auto_blur(temp_path, settings.get("watermark", ""))
+                        # പുതിയ എഡിറ്റിംഗ് സെറ്റിംഗ്സ് മുഴുവനായി നൽകുന്നു
+                        blurred_path = process_auto_blur(temp_path, settings)
                         await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption)
                         
                         if os.path.exists(temp_path): os.remove(temp_path)
