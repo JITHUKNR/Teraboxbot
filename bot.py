@@ -2,6 +2,7 @@ import logging
 logging.basicConfig(level=logging.INFO) 
 
 from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import threading
 import re
@@ -62,14 +63,14 @@ def get_settings(user_id):
                 "layout_mode": "magic", 
                 "file_name": "🔞_Click_To_Open_🍓",
                 "watermark": "",
-                # പുതിയ എഡിറ്റിംഗ് ഫീച്ചറുകൾ
                 "play_icon": False,
                 "vignette": False,
                 "tint_color": "none",
                 "font_choice": "0",
                 "text_color": "white",
                 "glow": True,
-                "badge_text": "none"
+                "badge_text": "none",
+                "inline_button": False # പുതിയ ഇൻലൈൻ ബട്ടൺ സെറ്റിംഗ്
             }
             settings_col.insert_one(default_settings)
             return default_settings
@@ -400,6 +401,17 @@ async def set_font(client, message):
     else:
         await message.reply_text("❌ ഉദാഹരണം: /set_font 1")
 
+# --- Button Commands (പുതിയത്) ---
+@app.on_message(filters.command("enable_button") & filters.private)
+async def enable_button(client, message):
+    update_settings(message.chat.id, "inline_button", True)
+    await message.reply_text("🔘 **Inline Buttons Enabled!** ഫോട്ടോയ്ക്ക് താഴെ ലിങ്കുകൾ ബട്ടൺ ആയി വരുന്നതാണ്.")
+
+@app.on_message(filters.command("disable_button") & filters.private)
+async def disable_button(client, message):
+    update_settings(message.chat.id, "inline_button", False)
+    await message.reply_text("❌ **Inline Buttons Disabled.** പഴയതുപോലെ ടെക്സ്റ്റ് ലിങ്കുകൾ മാത്രം വരുന്നതാണ്.")
+
 # =======================================================
 
 # --- Link Extraction ---
@@ -417,11 +429,21 @@ async def handle_link(client, message):
         wait_msg = await message.reply_text("Designing your post... 🎨")
         
         unique_urls = list(dict.fromkeys(urls))
+        reply_markup = None
         formatted_links = ""
         link_prefix = settings.get('link_text', '🍓Video ')
-        for index, url in enumerate(unique_urls, start=1):
-            formatted_links += f"{link_prefix}{index}\n{url}\n\n\n"
-        formatted_links = formatted_links.strip()
+        
+        # പുതിയ ഇൻലൈൻ ബട്ടൺ സിസ്റ്റം
+        if settings.get("inline_button", False):
+            button_list = []
+            for index, url in enumerate(unique_urls, start=1):
+                # ബട്ടണിനുള്ളിൽ നിങ്ങളുടെ കസ്റ്റം പേര് (ഉദാഹരണത്തിന് VIDEO🥵 1) വരുന്ന രീതി
+                button_list.append([InlineKeyboardButton(f"{link_prefix.strip()} {index}", url=url)])
+            reply_markup = InlineKeyboardMarkup(button_list)
+        else:
+            for index, url in enumerate(unique_urls, start=1):
+                formatted_links += f"{link_prefix}{index}\n{url}\n\n\n"
+            formatted_links = formatted_links.strip()
         
         final_caption = f"{settings.get('header', '')}{formatted_links}{settings.get('channel', '')}{settings.get('footer', '')}"
         
@@ -443,7 +465,7 @@ async def handle_link(client, message):
                     if temp_path:
                         # പുതിയ എഡിറ്റിംഗ് സെറ്റിംഗ്സ് മുഴുവനായി നൽകുന്നു
                         blurred_path = process_auto_blur(temp_path, settings)
-                        await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption)
+                        await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption, reply_markup=reply_markup)
                         
                         if os.path.exists(temp_path): os.remove(temp_path)
                         if os.path.exists(blurred_path): os.remove(blurred_path)
@@ -479,17 +501,20 @@ async def handle_link(client, message):
                             
                     if settings.get("use_blur", True) and thumb_path:
                         try:
-                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption)
+                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
                         except TypeError:
-                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption)
+                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
                     else:
-                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name=custom_file_name, caption=final_caption)
+                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
                 else:
-                    await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True))
+                    await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True), reply_markup=reply_markup)
                 
                 await wait_msg.delete()
             else:
-                await wait_msg.edit_text(final_caption)
+                if reply_markup:
+                    await wait_msg.edit_text(final_caption, reply_markup=reply_markup)
+                else:
+                    await wait_msg.edit_text(final_caption)
                 
         except Exception as e:
             logging.error(f"Send Error: {e}")
