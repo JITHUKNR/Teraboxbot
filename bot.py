@@ -4,6 +4,7 @@ logging.basicConfig(level=logging.INFO)
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
+import asyncio
 import threading
 import re
 import pymongo
@@ -36,6 +37,7 @@ except Exception as e:
     logging.error(f"MongoDB Error: {e}")
 
 FILE_CACHE = {}
+post_lock = None # 50 പോസ്റ്റുകൾ ഒരുമിച്ച് വന്നാൽ ബോട്ട് ഹാങ് ആവാതിരിക്കാനുള്ള ലോക്ക്
 
 # സിനിമാറ്റിക് വെബ് ഫോണ്ടുകളുടെ ലിസ്റ്റ്
 FONTS = {
@@ -70,7 +72,8 @@ def get_settings(user_id):
                 "text_color": "white",
                 "glow": True,
                 "badge_text": "none",
-                "inline_button": False # പുതിയ ഇൻലൈൻ ബട്ടൺ സെറ്റിംഗ്
+                "inline_button": False,
+                "target_channel": "none" # പുതിയ ടാർഗെറ്റ് ചാനൽ സെറ്റിംഗ്
             }
             settings_col.insert_one(default_settings)
             return default_settings
@@ -412,6 +415,19 @@ async def disable_button(client, message):
     update_settings(message.chat.id, "inline_button", False)
     await message.reply_text("❌ **Inline Buttons Disabled.** പഴയതുപോലെ ടെക്സ്റ്റ് ലിങ്കുകൾ മാത്രം വരുന്നതാണ്.")
 
+# --- പുതിയ Target Channel Command ---
+@app.on_message(filters.command("set_target") & filters.private)
+async def set_target(client, message):
+    text = message.text.replace("/set_target", "").strip()
+    if text:
+        update_settings(message.chat.id, "target_channel", text)
+        if text.lower() == "none":
+            await message.reply_text("✅ ചാനൽ പോസ്റ്റിംഗ് ഓഫ് ചെയ്തു. ഇനി മുതൽ പോസ്റ്റുകൾ നിങ്ങളുടെ ഇൻബോക്സിൽ മാത്രം വരുന്നതാണ്.")
+        else:
+            await message.reply_text(f"✅ ടാർഗെറ്റ് ചാനൽ സെറ്റ് ചെയ്തു: {text}\nഇനി നിങ്ങൾ അയക്കുന്ന ലിങ്കുകൾ ഈ ചാനലിലേക്ക് നേരിട്ട് പോസ്റ്റ് ആകുന്നതാണ്. \n(ശ്രദ്ധിക്കുക: ബോട്ടിനെ ചാനലിൽ Admin ആക്കാൻ മറക്കരുത്!)")
+    else:
+        await message.reply_text("❌ ഉദാഹരണം: /set_target @mychannel അല്ലെങ്കിൽ /set_target -100123456789\n(ഒഴിവാക്കാൻ /set_target none എന്ന് നൽകുക)")
+
 # =======================================================
 
 # --- Link Extraction ---
@@ -425,6 +441,16 @@ async def handle_link(client, message):
     if urls:
         settings = get_settings(message.chat.id)
         if not settings: return await message.reply_text("❌ Database Error.")
+
+        # ടാർഗെറ്റ് ചാനൽ കണ്ടെത്തുന്നു
+        target = settings.get("target_channel", "none")
+        if target.lower() != "none":
+            try:
+                target_chat = int(target)
+            except ValueError:
+                target_chat = target
+        else:
+            target_chat = message.chat.id
 
         wait_msg = await message.reply_text("Designing your post... 🎨")
         
@@ -447,6 +473,11 @@ async def handle_link(client, message):
         
         final_caption = f"{settings.get('header', '')}{formatted_links}{settings.get('channel', '')}{settings.get('footer', '')}"
         
+        # 50 പോസ്റ്റുകൾ വന്നാലും സേഫ് ആയിരിക്കാൻ ലോക്ക് സെറ്റ് ചെയ്യുന്നു
+        global post_lock
+        if post_lock is None:
+            post_lock = asyncio.Lock()
+            
         try:
             if settings.get("layout_mode") == "auto_blur":
                 incoming_media = None
@@ -463,13 +494,20 @@ async def handle_link(client, message):
                 if incoming_media:
                     temp_path = await client.download_media(incoming_media)
                     if temp_path:
-                        # പുതിയ എഡിറ്റിംഗ് സെറ്റിംഗ്സ് മുഴുവനായി നൽകുന്നു
                         blurred_path = process_auto_blur(temp_path, settings)
-                        await client.send_photo(chat_id=message.chat.id, photo=blurred_path, caption=final_caption, reply_markup=reply_markup)
+                        
+                        # ലോക്ക് ഉപയോഗിച്ച് സുരക്ഷിതമായി പോസ്റ്റ് ചെയ്യുന്നു
+                        async with post_lock:
+                            await client.send_photo(chat_id=target_chat, photo=blurred_path, caption=final_caption, reply_markup=reply_markup)
+                            await asyncio.sleep(3.5) # 3.5 സെക്കൻഡ് ഇടവേള (Anti-Flood)
                         
                         if os.path.exists(temp_path): os.remove(temp_path)
                         if os.path.exists(blurred_path): os.remove(blurred_path)
-                    await wait_msg.delete()
+                        
+                    if target_chat != message.chat.id:
+                        await wait_msg.edit_text(f"✅ പോസ്റ്റ് {target_chat}-ലേക്ക് വിജയകരമായി അയച്ചു!")
+                    else:
+                        await wait_msg.delete()
                     return 
                 else:
                     await wait_msg.edit_text("❌ ഈ വീഡിയോയ്ക്ക് കവർ ഫോട്ടോ ലഭ്യമല്ലാത്തതിനാൽ ഓട്ടോ-ബ്ലർ ചെയ്യാൻ കഴിയില്ല. ദയവായി കസ്റ്റം ഫോട്ടോ മോഡ് ഉപയോഗിക്കുക.")
@@ -499,22 +537,39 @@ async def handle_link(client, message):
                             resize_thumbnail(thumb_path)
                             FILE_CACHE[fake_photo] = thumb_path
                             
-                    if settings.get("use_blur", True) and thumb_path:
-                        try:
-                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
-                        except TypeError:
-                            await client.send_document(chat_id=message.chat.id, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
-                    else:
-                        await client.send_document(chat_id=message.chat.id, document=doc_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
+                    async with post_lock:
+                        if settings.get("use_blur", True) and thumb_path:
+                            try:
+                                await client.send_document(chat_id=target_chat, document=doc_path, thumbnail=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
+                            except TypeError:
+                                await client.send_document(chat_id=target_chat, document=doc_path, thumb=thumb_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
+                        else:
+                            await client.send_document(chat_id=target_chat, document=doc_path, file_name=custom_file_name, caption=final_caption, reply_markup=reply_markup)
+                        await asyncio.sleep(3.5) # 3.5 സെക്കൻഡ് ഇടവേള
                 else:
-                    await client.send_photo(chat_id=message.chat.id, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True), reply_markup=reply_markup)
+                    async with post_lock:
+                        await client.send_photo(chat_id=target_chat, photo=doc_path, caption=final_caption, has_spoiler=settings.get("use_blur", True), reply_markup=reply_markup)
+                        await asyncio.sleep(3.5) # 3.5 സെക്കൻഡ് ഇടവേള
                 
-                await wait_msg.delete()
-            else:
-                if reply_markup:
-                    await wait_msg.edit_text(final_caption, reply_markup=reply_markup)
+                if target_chat != message.chat.id:
+                    await wait_msg.edit_text(f"✅ പോസ്റ്റ് {target_chat}-ലേക്ക് വിജയകരമായി അയച്ചു!")
                 else:
-                    await wait_msg.edit_text(final_caption)
+                    await wait_msg.delete()
+            else:
+                async with post_lock:
+                    if target_chat != message.chat.id:
+                        if reply_markup:
+                            await client.send_message(chat_id=target_chat, text=final_caption, reply_markup=reply_markup)
+                        else:
+                            await client.send_message(chat_id=target_chat, text=final_caption)
+                        await asyncio.sleep(3.5)
+                        await wait_msg.edit_text(f"✅ പോസ്റ്റ് {target_chat}-ലേക്ക് വിജയകരമായി അയച്ചു!")
+                    else:
+                        if reply_markup:
+                            await wait_msg.edit_text(final_caption, reply_markup=reply_markup)
+                        else:
+                            await wait_msg.edit_text(final_caption)
+                        await asyncio.sleep(1)
                 
         except Exception as e:
             logging.error(f"Send Error: {e}")
