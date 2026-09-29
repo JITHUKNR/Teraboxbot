@@ -58,6 +58,7 @@ def get_settings(user_id):
                 "channel": "",
                 "custom_photo_id": None,
                 "fake_photo_id": None,
+                "gs_template_id": None, # NEW: Smart Thumbnail Template
                 "enable_picture": True,
                 "link_text": "🍓Video ",
                 "use_blur": True,
@@ -96,6 +97,56 @@ def resize_thumbnail(thumb_path):
         img.save(thumb_path, "JPEG")
     except Exception as e:
         logging.error(f"Thumbnail error: {e}")
+
+# ================= NEW: SMART THUMBNAIL PROCESSING =================
+def process_smart_thumbnail(target_image_path, template_path):
+    try:
+        target = Image.open(target_image_path).convert("RGBA")
+        template = Image.open(template_path).convert("RGBA")
+        
+        # 1. ഗ്രീൻ സ്ക്രീൻ ഉണ്ടോ എന്ന് പരിശോധിക്കുന്നു
+        datas = template.getdata()
+        new_data = []
+        is_green_screen = False
+        
+        for item in datas:
+            # പച്ച നിറം (Green) കണ്ടെത്താനുള്ള ലോജിക്
+            if item[1] > 150 and item[0] < 120 and item[2] < 120:
+                new_data.append((255, 255, 255, 0)) # സുതാര്യമാക്കുന്നു
+                is_green_screen = True
+            else:
+                new_data.append(item)
+                
+        template.putdata(new_data)
+        
+        # 2. ഫോട്ടോ ഫിറ്റ് ചെയ്യുന്നു
+        if is_green_screen:
+            # ഗ്രീൻ സ്ക്രീൻ ഉണ്ടെങ്കിൽ: ടെംപ്ലേറ്റിന്റെ അതേ വലുപ്പത്തിൽ ആക്കുന്നു
+            target = target.resize(template.size)
+            target.paste(template, (0, 0), template)
+        else:
+            # ഗ്രീൻ സ്ക്രീൻ ഇല്ലെങ്കിൽ: നടുവിൽ (Center) ചെറിയ സൈസിൽ വെക്കുന്നു
+            bg_w, bg_h = template.size
+            # യഥാർത്ഥ ഫോട്ടോയെ ടെംപ്ലേറ്റിന്റെ പകുതി വലുപ്പത്തിലേക്ക് ചെറുതാക്കുന്നു
+            target.thumbnail((int(bg_w * 0.6), int(bg_h * 0.6))) 
+            tg_w, tg_h = target.size
+            
+            # കൃത്യം നടുവിലുള്ള പോയിന്റ് കണ്ടെത്തുന്നു
+            offset_x = (bg_w - tg_w) // 2
+            offset_y = (bg_h - tg_h) // 2
+            
+            # ടെംപ്ലേറ്റിന് മുകളിൽ ഫോട്ടോ പേസ്റ്റ് ചെയ്യുന്നു
+            template.paste(target, (offset_x, offset_y))
+            target = template
+        
+        output_path = f"gs_{os.path.basename(target_image_path)}"
+        final_img = target.convert("RGB")
+        final_img.save(output_path, "JPEG")
+        return output_path
+    except Exception as e:
+        logging.error(f"Smart Thumbnail Error: {e}")
+        return target_image_path
+# ================================================================
 
 def process_auto_blur(image_path, settings):
     try:
@@ -249,15 +300,26 @@ async def send_photo_menu(client, message, edit=False):
 
 async def send_design_menu(client, message, edit=False):
     settings = get_settings(message.chat.id)
-    text = "🎨 **Design Settings**\n\n👇 Click below to modify your layout:"
+    text = (
+        "🎨 **Design & Smart Thumbnail Settings**\n\n"
+        "💡 **Smart Thumbnail:** Upload a Green Screen or Normal template to auto-fit cover photos inside it!\n\n"
+        "👇 Click below to modify your layout:"
+    )
     b_play = "🟢 Play Icon: ON" if settings.get("play_icon") else "🔴 Play Icon: OFF"
     b_vig = "🟢 Vignette: ON" if settings.get("vignette") else "🔴 Vignette: OFF"
     b_glow = "🟢 Glow: ON" if settings.get("glow") else "🔴 Glow: OFF"
     
+    gs_status = "🟢 Smart Thumbnail: ON" if settings.get("layout_mode") == "smart_thumbnail" else "🔴 Smart Thumbnail: OFF"
+    temp_status = "Status: Template Saved ✅" if settings.get("gs_template_id") else "Status: No Template ❌"
+    
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton(b_play, callback_data="toggle_play")],
         [InlineKeyboardButton(b_vig, callback_data="toggle_vig")],
-        [InlineKeyboardButton(b_glow, callback_data="toggle_glow")]
+        [InlineKeyboardButton(b_glow, callback_data="toggle_glow")],
+        [InlineKeyboardButton("➖➖➖➖➖➖➖➖➖➖➖➖", callback_data="none")],
+        [InlineKeyboardButton(gs_status, callback_data="toggle_gsthm")],
+        [InlineKeyboardButton(f"📸 Upload Template ({temp_status})", callback_data="ask_gstemp")],
+        [InlineKeyboardButton("🗑️ Remove Template", callback_data="remove_gstemp")]
     ])
     if edit: await message.edit_text(text, reply_markup=markup)
     else: await message.reply_text(text, reply_markup=markup)
@@ -606,6 +668,21 @@ async def cb_handler(client, query: CallbackQuery):
         await query.answer("✅ Header & Footer Texts Cleared!", show_alert=True)
         await send_text_menu(client, query.message, edit=True)
 
+    # NEW: Smart Thumbnail Handlers
+    elif data == "toggle_gsthm":
+        new_mode = "smart_thumbnail" if settings.get("layout_mode") != "smart_thumbnail" else "magic"
+        update_settings(user_id, "layout_mode", new_mode)
+        await send_design_menu(client, query.message, edit=True)
+        
+    elif data == "ask_gstemp":
+        update_settings(user_id, "state", "wait_gstemp")
+        await query.message.reply_text("📸 **Upload Smart Thumbnail Template**\n\nPlease send your Green Screen or Normal template photo here.")
+        
+    elif data == "remove_gstemp":
+        update_settings(user_id, "gs_template_id", None)
+        await query.answer("✅ Smart Thumbnail Template removed!", show_alert=True)
+        await send_design_menu(client, query.message, edit=True)
+        
 # ================= MAIN LINK & STATE HANDLER =================
 # Excluded the new menu commands from being processed as links
 @app.on_message((filters.text | filters.photo | filters.video | filters.animation | filters.document) & filters.private & ~filters.command(["blur_menu", "photo_menu", "design_menu", "target_menu", "button_menu", "text_menu", "status"]))
@@ -705,6 +782,35 @@ async def handle_link(client, message):
             elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
                 incoming_media = message.document.file_id
             # ==========================================================
+
+            # NEW: SMART THUMBNAIL PROCESSING
+            if settings.get("layout_mode") == "smart_thumbnail" and settings.get("gs_template_id"):
+                gs_template = settings.get("gs_template_id")
+                target_img_id = incoming_media if incoming_media else settings.get("custom_photo_id")
+                
+                if target_img_id:
+                    temp_path = await client.download_media(target_img_id)
+                    temp_gs_path = await client.download_media(gs_template)
+                    
+                    if temp_path and temp_gs_path:
+                        final_gs_path = process_smart_thumbnail(temp_path, temp_gs_path)
+                        
+                        async with post_lock:
+                            await client.send_photo(chat_id=target_chat, photo=final_gs_path, caption=final_caption, reply_markup=reply_markup)
+                            await asyncio.sleep(3.5) 
+                        
+                        if os.path.exists(temp_path): os.remove(temp_path)
+                        if os.path.exists(temp_gs_path): os.remove(temp_gs_path)
+                        if os.path.exists(final_gs_path): os.remove(final_gs_path)
+                        
+                    if target_chat != message.chat.id:
+                        await wait_msg.edit_text(f"✅ Post successfully sent to {target_chat}!")
+                    else:
+                        await wait_msg.delete()
+                    return
+                else:
+                    await wait_msg.edit_text("❌ No target photo found for Smart Thumbnail mode.")
+                    return
 
             if settings.get("layout_mode") == "auto_blur":
                 if incoming_media:
