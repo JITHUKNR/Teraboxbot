@@ -703,7 +703,17 @@ async def handle_link(client, message):
             await message.reply_text("✅ Success! New custom photo saved.")
         else: await message.reply_text("❌ Please send a valid photo.")
         return
-        
+
+    # NEW: Smart Thumbnail Template Input
+    elif state == "wait_gstemp":
+        if message.photo or (message.document and message.document.mime_type and message.document.mime_type.startswith('image/')):
+            file_id = message.photo.file_id if message.photo else message.document.file_id
+            update_settings(message.chat.id, "gs_template_id", file_id)
+            update_settings(message.chat.id, "state", "idle")
+            await message.reply_text("✅ Success! Smart Thumbnail Template saved.")
+        else: await message.reply_text("❌ Please send a valid image template.")
+        return
+                
     elif state == "wait_target" and message.text:
         update_settings(message.chat.id, "target_channel", message.text.strip())
         update_settings(message.chat.id, "state", "idle")
