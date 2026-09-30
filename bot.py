@@ -352,21 +352,23 @@ async def send_text_menu(client, message, edit=False):
     settings = get_settings(message.chat.id)
     h_status = "Set ✅" if settings.get("header") else "None ❌"
     f_status = "Set ✅" if settings.get("footer") else "None ❌"
+    l_status = settings.get("link_text", "🍓Video ")
     
     text = (
         "📝 **Caption Text Settings**\n\n"
         f"📌 **Header (Top):** {h_status}\n"
-        f"📌 **Footer (Bottom):** {f_status}\n\n"
+        f"📌 **Footer (Bottom):** {f_status}\n"
+        f"📌 **Link Text:** `{l_status.strip()}`\n\n"
         "👇 Choose what you want to add/change:"
     )
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("📝 Set Header Text", callback_data="ask_header")],
         [InlineKeyboardButton("📝 Set Footer Text", callback_data="ask_footer")],
+        [InlineKeyboardButton("🔗 Set Link Text", callback_data="ask_linktext")],
         [InlineKeyboardButton("🗑️ Clear All Texts", callback_data="clear_texts")]
     ])
     if edit: await message.edit_text(text, reply_markup=markup)
     else: await message.reply_text(text, reply_markup=markup)
-
 
 # ================= ORIGINAL COMMANDS (Kept 100% Intact) =================
 @app.on_message(filters.command("start") & filters.private)
@@ -668,6 +670,10 @@ async def cb_handler(client, query: CallbackQuery):
         await query.answer("✅ Header & Footer Texts Cleared!", show_alert=True)
         await send_text_menu(client, query.message, edit=True)
 
+    elif data == "ask_linktext":
+        update_settings(user_id, "state", "wait_linktext")
+        await query.message.reply_text("🔗 **Type your Link Text**\n\n(e.g. 🌸VIDEO, 🔥WATCH NOW, etc.)")
+
     # NEW: Smart Thumbnail Handlers
     elif data == "toggle_gsthm":
         new_mode = "smart_thumbnail" if settings.get("layout_mode") != "smart_thumbnail" else "magic"
@@ -736,6 +742,12 @@ async def handle_link(client, message):
         update_settings(message.chat.id, "footer", "\n\n" + message.text.strip())
         update_settings(message.chat.id, "state", "idle")
         await message.reply_text("✅ Success! Footer text saved.")
+        return
+
+    elif state == "wait_linktext" and message.text:
+        update_settings(message.chat.id, "link_text", message.text.strip() + " ")
+        update_settings(message.chat.id, "state", "idle")
+        await message.reply_text("✅ Success! Link text saved.")
         return
     # -----------------------------------------------------------------
 
